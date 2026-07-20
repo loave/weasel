@@ -350,12 +350,33 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
   if (FAILED(_pComposition->GetRange(&pRange)))
     return E_FAIL;
 
-  if (FAILED(pRange->SetText(ec, 0, _text.c_str(),
-                             static_cast<LONG>(_text.length()))))
-    return E_FAIL;
+  // Cursor marker support: U+FDD0 (Unicode permanent non-character)
+  // When auto_pair commits paired symbols with this marker between them,
+  // position cursor at the marker location instead of the end.
+  const wchar_t CURSOR_MARKER = 0xFDD0;
+  size_t marker_pos = _text.find(CURSOR_MARKER);
 
-  /* update the selection to an insertion point just past the inserted text. */
-  pRange->Collapse(ec, TF_ANCHOR_END);
+  if (marker_pos != std::wstring::npos) {
+    // Strip marker, produce clean text
+    std::wstring clean_text =
+        _text.substr(0, marker_pos) + _text.substr(marker_pos + 1);
+
+    if (FAILED(pRange->SetText(ec, 0, clean_text.c_str(),
+                               static_cast<LONG>(clean_text.length()))))
+      return E_FAIL;
+
+    // Position cursor at marker location (between the pair symbols)
+    pRange->Collapse(ec, TF_ANCHOR_START);
+    LONG cch;
+    pRange->ShiftStart(ec, static_cast<LONG>(marker_pos), &cch, NULL);
+  } else {
+    // No marker: original behavior, cursor at end
+    if (FAILED(pRange->SetText(ec, 0, _text.c_str(),
+                               static_cast<LONG>(_text.length()))))
+      return E_FAIL;
+
+    pRange->Collapse(ec, TF_ANCHOR_END);
+  }
 
   tfSelection.range = pRange;
   tfSelection.style.ase = TF_AE_NONE;
