@@ -3,6 +3,7 @@
 #include "EditSession.h"
 #include "ResponseParser.h"
 #include "CandidateList.h"
+#include "AutoPairLog.h"
 
 /* Start Composition */
 class CStartCompositionEditSession : public CEditSession {
@@ -327,10 +328,12 @@ class CInsertTextEditSession : public CEditSession {
   CInsertTextEditSession(com_ptr<WeaselTSF> pTextService,
                          com_ptr<ITfContext> pContext,
                          com_ptr<ITfComposition> pComposition,
-                         const std::wstring& text)
+                         const std::wstring& text,
+                         bool cursorBack)
       : CEditSession(pTextService, pContext),
         _text(text),
-        _pComposition(pComposition) {}
+        _pComposition(pComposition),
+        _cursorBack(cursorBack) {}
 
   /* ITfEditSession */
   STDMETHODIMP DoEditSession(TfEditCookie ec);
@@ -338,6 +341,7 @@ class CInsertTextEditSession : public CEditSession {
  private:
   std::wstring _text;
   com_ptr<ITfComposition> _pComposition;
+  bool _cursorBack;
 };
 
 STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
@@ -354,7 +358,16 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
   // When auto_pair commits paired symbols with this marker between them,
   // position cursor at the marker location instead of the end.
   const wchar_t CURSOR_MARKER = 0xFDD0;
-  size_t marker_pos = _text.find(CURSOR_MARKER);
+  size_t marker_pos =
+      _cursorBack ? _text.find(CURSOR_MARKER) : std::wstring::npos;
+
+  APLOG(1, std::string("[InsertText] cursorBack=") +
+               std::to_string((int)_cursorBack) +
+               " marker_pos=" +
+               (marker_pos == std::wstring::npos ? std::string("npos")
+                                                 : std::to_string(marker_pos)));
+  APLOG(2, std::string("[InsertText] text codepoints: ") +
+               autopair_log::DumpCodepoints(_text));
 
   if (marker_pos != std::wstring::npos) {
     // Strip marker, produce clean text
@@ -368,7 +381,11 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
     // Position cursor at marker location (between the pair symbols)
     pRange->Collapse(ec, TF_ANCHOR_START);
     LONG cch;
-    pRange->ShiftStart(ec, static_cast<LONG>(marker_pos), &cch, NULL);
+    HRESULT hrShift =
+        pRange->ShiftStart(ec, static_cast<LONG>(marker_pos), &cch, NULL);
+    APLOG(1, std::string("[InsertText] cursor centered, ShiftStart hr=") +
+                 std::to_string((long)hrShift) +
+                 " shifted=" + std::to_string((long)cch));
   } else {
     // No marker: original behavior, cursor at end
     if (FAILED(pRange->SetText(ec, 0, _text.c_str(),
@@ -392,8 +409,8 @@ BOOL WeaselTSF::_InsertText(com_ptr<ITfContext> pContext,
   CInsertTextEditSession* pEditSession;
   HRESULT hr;
 
-  if ((pEditSession = new CInsertTextEditSession(this, pContext, _pComposition,
-                                                 text)) != NULL) {
+  if ((pEditSession = new CInsertTextEditSession(
+           this, pContext, _pComposition, text, _cursorBack)) != NULL) {
     pContext->RequestEditSession(_tfClientId, pEditSession,
                                  TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
     pEditSession->Release();

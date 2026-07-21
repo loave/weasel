@@ -2,6 +2,7 @@
 #include "WeaselTSF.h"
 #include "CandidateList.h"
 #include "ResponseParser.h"
+#include "AutoPairLog.h"
 
 STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
   // get commit string from server
@@ -16,7 +17,14 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
   _UpdateLanguageBar(_status);
 
   if (ok) {
+    // record cursor_back for this commit, used by CInsertTextEditSession
+    _cursorBack = config.cursor_back;
     if (!commit.empty()) {
+      APLOG(1, std::string("[EditSession] commit len=") +
+                   std::to_string(commit.length()) +
+                   " cursor_back=" + std::to_string((int)config.cursor_back));
+      APLOG(2, std::string("[EditSession] commit codepoints: ") +
+                   autopair_log::DumpCodepoints(commit));
       // For auto-selecting, commit and preedit can both exist.
       // Commit and close the original composition first.
       if (!_IsComposing()) {

@@ -187,9 +187,13 @@ struct Status {
 
 // 用於向前端告知設置信息
 struct Config {
-  Config() : inline_preedit(false) {}
-  void reset() { inline_preedit = false; }
+  Config() : inline_preedit(false), cursor_back(false) {}
+  void reset() {
+    inline_preedit = false;
+    cursor_back = false;
+  }
   bool inline_preedit;
+  bool cursor_back;  // auto_pair 成对符号上屏后光标回到中间
 };
 
 struct UIStyle {
@@ -224,6 +228,7 @@ struct UIStyle {
   int candidate_abbreviate_length;
 
   bool inline_preedit;
+  bool cursor_back;  // auto_pair 成对符号上屏后光标回到中间
   bool display_tray_icon;
   bool ascii_tip_follow_cursor;
   bool paging_on_scroll;
@@ -301,6 +306,7 @@ struct UIStyle {
         comment_font_point(0),
         candidate_abbreviate_length(0),
         inline_preedit(false),
+        cursor_back(false),
         display_tray_icon(false),
         ascii_tip_follow_cursor(false),
         paging_on_scroll(false),
@@ -437,6 +443,7 @@ void serialize(Archive& ar, weasel::UIStyle& s, const unsigned int version) {
   ar & s.comment_font_point;
   ar & s.candidate_abbreviate_length;
   ar & s.inline_preedit;
+  ar & s.cursor_back;
   ar & s.align_type;
   ar & s.antialias_mode;
   ar & s.mark_text;

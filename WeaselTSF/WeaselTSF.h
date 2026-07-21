@@ -233,4 +233,5 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   BOOL _async_edit = false;
   BOOL _committed = false;
   BOOL _isToOpenClose = false;
+  BOOL _cursorBack = false;  // 本次 commit 是否启用光标居中（来自 config.cursor_back）
 };
