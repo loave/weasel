@@ -362,13 +362,29 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
                              static_cast<LONG>(_text.length()))))
     return E_FAIL;
 
-  pRange->Collapse(ec, TF_ANCHOR_END);
+  if (_cursorBackCount > 0 &&
+      _cursorBackCount < static_cast<int>(_text.length())) {
+    // Position cursor at (length - cursorBackCount) from start
+    LONG target = static_cast<LONG>(_text.length()) - _cursorBackCount;
+    pRange->Collapse(ec, TF_ANCHOR_START);
+    LONG cch;
+    pRange->ShiftStart(ec, target, &cch, NULL);
+    APLOG(1, std::string("[InsertText] cursor back: target=") +
+                 std::to_string(target) +
+                 " shifted=" + std::to_string((long)cch));
+  } else {
+    pRange->Collapse(ec, TF_ANCHOR_END);
+  }
 
   tfSelection.range = pRange;
   tfSelection.style.ase = TF_AE_NONE;
   tfSelection.style.fInterimChar = FALSE;
-
   _pContext->SetSelection(ec, 1, &tfSelection);
+
+  // End composition in the same edit session to avoid async timing issues
+  _pTextService->_ClearCompositionDisplayAttributes(ec, _pContext);
+  _pComposition->EndComposition(ec);
+  _pTextService->_FinalizeComposition();
 
   return hRet;
 }

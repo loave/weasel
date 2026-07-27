@@ -84,20 +84,14 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
                           _fCUASWorkaroundEnabled && !config.inline_preedit);
       }
       _InsertText(_pEditSessionContext, commit);
-      _EndComposition(_pEditSessionContext, false);
-      // Move cursor back for auto_pair (simulate Left arrow keys)
-      if (_cursorBackCount > 0) {
-        APLog(1, std::string("[EditSession] sending Left key x") +
-                     std::to_string(_cursorBackCount));
-        INPUT inputs[2] = {};
-        inputs[0].type = INPUT_KEYBOARD;
-        inputs[0].ki.wVk = VK_LEFT;
-        inputs[1].type = INPUT_KEYBOARD;
-        inputs[1].ki.wVk = VK_LEFT;
-        inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
-        for (int i = 0; i < _cursorBackCount; i++) {
-          SendInput(2, inputs, sizeof(INPUT));
-        }
+      // When cursorBackCount > 0, EndComposition is done inside
+      // CInsertTextEditSession to keep cursor positioning atomic.
+      // Otherwise, end composition separately as before.
+      if (_cursorBackCount == 0) {
+        _EndComposition(_pEditSessionContext, false);
+      } else {
+        // InsertText already ended composition; just clean up UI
+        _cand->EndUI();
         _cursorBackCount = 0;
       }
       _committed = TRUE;
