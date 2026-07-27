@@ -1,8 +1,9 @@
 #pragma once
 // 轻量调试日志（独立于 IPC 配置链路）
-// 级别控制文件：%APPDATA%\Rime\weasel_debug.level（内容为数字：0=静默 1=关键 2=详细）
-// 日志输出：%APPDATA%\Rime\weasel_autopair.log
-// 改级别后需重开使用输入法的应用进程生效（TSF DLL 进程内加载）
+// 级别文件: %APPDATA%\Rime\weasel_debug.level
+//   0=静默 1=关键 2=详细
+// 日志输出: %APPDATA%\Rime\weasel_autopair.log
+// 重开应用进程生效（TSF DLL 进程内加载）
 #include <windows.h>
 #include <cstdio>
 #include <fstream>

@@ -362,8 +362,7 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
       _cursorBack ? _text.find(CURSOR_MARKER) : std::wstring::npos;
 
   APLOG(1, std::string("[InsertText] cursorBack=") +
-               std::to_string((int)_cursorBack) +
-               " marker_pos=" +
+               std::to_string((int)_cursorBack) + " marker_pos=" +
                (marker_pos == std::wstring::npos ? std::string("npos")
                                                  : std::to_string(marker_pos)));
   APLOG(2, std::string("[InsertText] text codepoints: ") +
@@ -409,8 +408,8 @@ BOOL WeaselTSF::_InsertText(com_ptr<ITfContext> pContext,
   CInsertTextEditSession* pEditSession;
   HRESULT hr;
 
-  if ((pEditSession = new CInsertTextEditSession(
-           this, pContext, _pComposition, text, _cursorBack)) != NULL) {
+  if ((pEditSession = new CInsertTextEditSession(this, pContext, _pComposition,
+                                                 text, _cursorBack)) != NULL) {
     pContext->RequestEditSession(_tfClientId, pEditSession,
                                  TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
     pEditSession->Release();

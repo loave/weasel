@@ -75,8 +75,8 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
       APLog(1, std::string("[EditSession] commit len=") +
                    std::to_string(commit.length()) +
                    " cursor_back=" + std::to_string((int)config.cursor_back));
-      APLog(2, std::string("[EditSession] commit codepoints: ") +
-                   APDump(commit));
+      APLog(2,
+            std::string("[EditSession] commit codepoints: ") + APDump(commit));
       // For auto-selecting, commit and preedit can both exist.
       // Commit and close the original composition first.
       if (!_IsComposing()) {
