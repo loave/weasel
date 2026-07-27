@@ -21,5 +21,7 @@ void Configurator::Store(Deserializer::KeyType const& key,
     m_pTarget->p_config->inline_preedit = bool_value;
   } else if (key[1] == L"cursor_back") {
     m_pTarget->p_config->cursor_back = bool_value;
+  } else if (key[1] == L"cursor_back_count") {
+    m_pTarget->p_config->cursor_back_count = std::stoi(value);
   }
 }
