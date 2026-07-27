@@ -750,8 +750,12 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     body.append(L"commit=").append(commit_text_w).append(L"\n");
     // auto_pair cursor offset: read from rime property set by Lua
     static char cursor_back_buf[16] = {0};
-    if (rime_api->get_property(session_id, "cursor_back_count", cursor_back_buf,
-                               sizeof(cursor_back_buf) - 1)) {
+    Bool got_prop =
+        rime_api->get_property(session_id, "cursor_back_count", cursor_back_buf,
+                               sizeof(cursor_back_buf) - 1);
+    LOG(INFO) << "[auto_pair] get_property cursor_back_count: got=" << got_prop
+              << " buf='" << cursor_back_buf << "'";
+    if (got_prop) {
       int cursor_back_count = atoi(cursor_back_buf);
       if (cursor_back_count > 0) {
         body.append(L"commit.cursor_back_count=")
