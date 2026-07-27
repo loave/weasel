@@ -1,10 +1,5 @@
 #pragma once
-// 轻量调试日志（独立于 IPC 配置链路）
-// 级别文件: %APPDATA%\Rime\weasel_debug.level
-//   0=静默 1=关键 2=详细
-// 日志输出: %APPDATA%\Rime\weasel_autopair.log
-// 同时输出到 OutputDebugString（可用 DebugView 查看）
-// 重开应用进程生效（TSF DLL 进程内加载）
+// 调试日志 - 始终输出到 OutputDebugString + 文件
 #include <windows.h>
 #include <shlobj.h>
 #include <cstdio>
@@ -18,7 +13,6 @@ inline std::wstring GetRimePath() {
   if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, path))) {
     return std::wstring(path) + L"\\Rime";
   }
-  // fallback to env var
   DWORD n = GetEnvironmentVariableW(L"APPDATA", path, MAX_PATH);
   if (n > 0 && n < MAX_PATH) {
     return std::wstring(path) + L"\\Rime";
@@ -26,30 +20,11 @@ inline std::wstring GetRimePath() {
   return L"";
 }
 
-inline int GetLogLevel() {
-  static int cached = -1;
-  if (cached >= 0)
-    return cached;
-  cached = 0;
-  std::wstring rime = GetRimePath();
-  if (rime.empty())
-    return cached;
-  std::wstring levelFile = rime + L"\\weasel_debug.level";
-  std::ifstream f(levelFile);
-  if (f) {
-    int lv = 0;
-    if (f >> lv)
-      cached = lv;
-  }
-  return cached;
-}
-
 inline void Log(int level, const std::string& msg) {
-  // Always output to debugger (DebugView) regardless of level
+  // ALWAYS output to debugger (DebugView)
   OutputDebugStringA(("[autopair] " + msg + "\n").c_str());
 
-  if (level > GetLogLevel())
-    return;
+  // ALWAYS output to file (no level check)
   std::wstring rime = GetRimePath();
   if (rime.empty())
     return;
@@ -63,6 +38,7 @@ inline void Log(int level, const std::string& msg) {
   sprintf_s(ts, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond,
             st.wMilliseconds);
   f << ts << msg << "\n";
+  f.flush();
 }
 
 inline std::string DumpCodepoints(const std::wstring& s) {

@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "Deserializer.h"
 #include "Configurator.h"
+#include <string>
+#include <windows.h>
 
 using namespace weasel;
 
@@ -23,5 +25,9 @@ void Configurator::Store(Deserializer::KeyType const& key,
     m_pTarget->p_config->cursor_back = bool_value;
   } else if (key[1] == L"cursor_back_count") {
     m_pTarget->p_config->cursor_back_count = std::stoi(value);
+    OutputDebugStringA(("[autopair][Configurator] cursor_back_count=" +
+                        std::to_string(m_pTarget->p_config->cursor_back_count) +
+                        "\n")
+                           .c_str());
   }
 }

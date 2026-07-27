@@ -110,6 +110,8 @@ void RimeWithWeaselHandler::Initialize() {
     return;
   }
 
+  LOG(WARNING) << "[BUILD_MARKER] auto_pair_cursor_back 2027-1950";
+  OutputDebugStringA("[BUILD_MARKER] auto_pair_cursor_back 2027-1950\n");
   LOG(INFO) << "Initializing la rime.";
   rime_api->initialize(NULL);
   if (rime_api->start_maintenance(/*full_check = */ False)) {
@@ -748,7 +750,13 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     actions.push_back("commit");
     std::wstring commit_text_w = escape_string(u8tow(commit.text));
     body.append(L"commit=").append(commit_text_w).append(L"\n");
+    OutputDebugStringA(
+        (std::string("[auto_pair] _Respond: get_commit=true, text='") +
+         commit.text + "'\n")
+            .c_str());
     rime_api->free_commit(&commit);
+  } else {
+    OutputDebugStringA("[auto_pair] _Respond: get_commit=false\n");
   }
 
   bool is_composing = false;
@@ -904,15 +912,30 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
   // auto_pair cursor offset: read from rime property set by Lua
   {
     char cursor_back_buf[16] = {0};
-    if (rime_api->get_property(session_id, "cursor_back_count", cursor_back_buf,
-                               sizeof(cursor_back_buf) - 1)) {
+    Bool got =
+        rime_api->get_property(session_id, "cursor_back_count", cursor_back_buf,
+                               sizeof(cursor_back_buf) - 1);
+    OutputDebugStringA((std::string("[auto_pair] get_property: got=") +
+                        std::to_string(got) + " buf='" + cursor_back_buf +
+                        "'\n")
+                           .c_str());
+    if (got) {
       int cbc = atoi(cursor_back_buf);
       if (cbc > 0) {
-        body.append(L"config.cursor_back_count=")
-            .append(std::to_wstring(cbc))
-            .append(L"\n");
         rime_api->set_property(session_id, "cursor_back_count", "");
-        LOG(INFO) << "[auto_pair] cursor_back_count=" << cbc;
+        OutputDebugStringA((std::string("[auto_pair] cursor_back_count=") +
+                            std::to_string(cbc) + " sending VK_LEFT\n")
+                               .c_str());
+        // Move cursor back by sending Left arrow keys
+        INPUT inputs[2] = {};
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].ki.wVk = VK_LEFT;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].ki.wVk = VK_LEFT;
+        inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        for (int i = 0; i < cbc; i++) {
+          SendInput(2, inputs, sizeof(INPUT));
+        }
       }
     }
   }
