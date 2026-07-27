@@ -187,13 +187,15 @@ struct Status {
 
 // 用於向前端告知設置信息
 struct Config {
-  Config() : inline_preedit(false), cursor_back(false) {}
+  Config() : inline_preedit(false), cursor_back(false), cursor_back_count(0) {}
   void reset() {
     inline_preedit = false;
     cursor_back = false;
+    cursor_back_count = 0;
   }
   bool inline_preedit;
-  bool cursor_back;  // auto_pair 成对符号上屏后光标回到中间
+  bool cursor_back;       // auto_pair 成对符号上屏后光标回到中间
+  int cursor_back_count;  // 本次 commit 光标回退字符数（由 Lua 设置）
 };
 
 struct UIStyle {

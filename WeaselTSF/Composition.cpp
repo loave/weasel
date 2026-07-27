@@ -329,11 +329,11 @@ class CInsertTextEditSession : public CEditSession {
                          com_ptr<ITfContext> pContext,
                          com_ptr<ITfComposition> pComposition,
                          const std::wstring& text,
-                         bool cursorBack)
+                         int cursorBackCount)
       : CEditSession(pTextService, pContext),
         _text(text),
         _pComposition(pComposition),
-        _cursorBack(cursorBack) {}
+        _cursorBackCount(cursorBackCount) {}
 
   /* ITfEditSession */
   STDMETHODIMP DoEditSession(TfEditCookie ec);
@@ -341,7 +341,7 @@ class CInsertTextEditSession : public CEditSession {
  private:
   std::wstring _text;
   com_ptr<ITfComposition> _pComposition;
-  bool _cursorBack;
+  int _cursorBackCount;
 };
 
 STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
@@ -354,43 +354,29 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
   if (FAILED(_pComposition->GetRange(&pRange)))
     return E_FAIL;
 
-  // Cursor marker support: U+FDD0 (Unicode permanent non-character)
-  // When auto_pair commits paired symbols with this marker between them,
-  // position cursor at the marker location instead of the end.
-  const wchar_t CURSOR_MARKER = 0xFDD0;
-  size_t marker_pos =
-      _cursorBack ? _text.find(CURSOR_MARKER) : std::wstring::npos;
-
-  APLOG(1, std::string("[InsertText] cursorBack=") +
-               std::to_string((int)_cursorBack) + " marker_pos=" +
-               (marker_pos == std::wstring::npos ? std::string("npos")
-                                                 : std::to_string(marker_pos)));
+  APLOG(1, std::string("[InsertText] cursorBackCount=") +
+               std::to_string(_cursorBackCount) +
+               " textLen=" + std::to_string(_text.length()));
   APLOG(2, std::string("[InsertText] text codepoints: ") +
                autopair_log::DumpCodepoints(_text));
 
-  if (marker_pos != std::wstring::npos) {
-    // Strip marker, produce clean text
-    std::wstring clean_text =
-        _text.substr(0, marker_pos) + _text.substr(marker_pos + 1);
+  if (FAILED(pRange->SetText(ec, 0, _text.c_str(),
+                             static_cast<LONG>(_text.length()))))
+    return E_FAIL;
 
-    if (FAILED(pRange->SetText(ec, 0, clean_text.c_str(),
-                               static_cast<LONG>(clean_text.length()))))
-      return E_FAIL;
-
-    // Position cursor at marker location (between the pair symbols)
+  if (_cursorBackCount > 0 &&
+      _cursorBackCount < static_cast<int>(_text.length())) {
+    // Move cursor back N characters from end (for auto_pair)
+    LONG target = static_cast<LONG>(_text.length()) - _cursorBackCount;
     pRange->Collapse(ec, TF_ANCHOR_START);
     LONG cch;
-    HRESULT hrShift =
-        pRange->ShiftStart(ec, static_cast<LONG>(marker_pos), &cch, NULL);
-    APLOG(1, std::string("[InsertText] cursor centered, ShiftStart hr=") +
-                 std::to_string((long)hrShift) +
-                 " shifted=" + std::to_string((long)cch));
+    HRESULT hrShift = pRange->ShiftStart(ec, target, &cch, NULL);
+    APLOG(1, std::string("[InsertText] cursor back, target=") +
+                 std::to_string(target) +
+                 " shifted=" + std::to_string((long)cch) +
+                 " hr=" + std::to_string((long)hrShift));
   } else {
-    // No marker: original behavior, cursor at end
-    if (FAILED(pRange->SetText(ec, 0, _text.c_str(),
-                               static_cast<LONG>(_text.length()))))
-      return E_FAIL;
-
+    // Normal: cursor at end
     pRange->Collapse(ec, TF_ANCHOR_END);
   }
 
@@ -408,8 +394,8 @@ BOOL WeaselTSF::_InsertText(com_ptr<ITfContext> pContext,
   CInsertTextEditSession* pEditSession;
   HRESULT hr;
 
-  if ((pEditSession = new CInsertTextEditSession(this, pContext, _pComposition,
-                                                 text, _cursorBack)) != NULL) {
+  if ((pEditSession = new CInsertTextEditSession(
+           this, pContext, _pComposition, text, _cursorBackCount)) != NULL) {
     pContext->RequestEditSession(_tfClientId, pEditSession,
                                  TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
     pEditSession->Release();

@@ -233,5 +233,5 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   BOOL _async_edit = false;
   BOOL _committed = false;
   BOOL _isToOpenClose = false;
-  BOOL _cursorBack = false;  // 光标居中开关
+  BOOL _cursorBackCount = 0;  // 光标回退字符数
 };

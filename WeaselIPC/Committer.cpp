@@ -19,5 +19,7 @@ void Committer::Store(Deserializer::KeyType const& key,
     return;
   if (key.size() == 1) {
     *m_pTarget->p_commit = unescape_string(value);
+  } else if (key.size() == 2 && key[1] == L"cursor_back_count") {
+    m_pTarget->p_config->cursor_back_count = std::stoi(value);
   }
 }

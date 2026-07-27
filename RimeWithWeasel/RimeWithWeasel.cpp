@@ -748,6 +748,19 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     actions.push_back("commit");
     std::wstring commit_text_w = escape_string(u8tow(commit.text));
     body.append(L"commit=").append(commit_text_w).append(L"\n");
+    // auto_pair cursor offset: read from rime property set by Lua
+    static char cursor_back_buf[16] = {0};
+    if (rime_api->get_property(session_id, "cursor_back_count", cursor_back_buf,
+                               sizeof(cursor_back_buf) - 1)) {
+      int cursor_back_count = atoi(cursor_back_buf);
+      if (cursor_back_count > 0) {
+        body.append(L"commit.cursor_back_count=")
+            .append(std::to_wstring(cursor_back_count))
+            .append(L"\n");
+        // clear the property so it doesn't persist to next commit
+        rime_api->set_property(session_id, "cursor_back_count", "");
+      }
+    }
     rime_api->free_commit(&commit);
   }
 

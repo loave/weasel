@@ -69,12 +69,12 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
   _UpdateLanguageBar(_status);
 
   if (ok) {
-    // record cursor_back for this commit, used by CInsertTextEditSession
-    _cursorBack = config.cursor_back;
+    // record cursor_back_count for this commit (set by Lua auto_pair)
+    _cursorBackCount = config.cursor_back_count;
     if (!commit.empty()) {
       APLog(1, std::string("[EditSession] commit len=") +
-                   std::to_string(commit.length()) +
-                   " cursor_back=" + std::to_string((int)config.cursor_back));
+                   std::to_string(commit.length()) + " cursor_back_count=" +
+                   std::to_string(config.cursor_back_count));
       APLog(2,
             std::string("[EditSession] commit codepoints: ") + APDump(commit));
       // For auto-selecting, commit and preedit can both exist.
