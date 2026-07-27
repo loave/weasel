@@ -328,12 +328,10 @@ class CInsertTextEditSession : public CEditSession {
   CInsertTextEditSession(com_ptr<WeaselTSF> pTextService,
                          com_ptr<ITfContext> pContext,
                          com_ptr<ITfComposition> pComposition,
-                         const std::wstring& text,
-                         int cursorBackCount)
+                         const std::wstring& text)
       : CEditSession(pTextService, pContext),
         _text(text),
-        _pComposition(pComposition),
-        _cursorBackCount(cursorBackCount) {}
+        _pComposition(pComposition) {}
 
   /* ITfEditSession */
   STDMETHODIMP DoEditSession(TfEditCookie ec);
@@ -341,7 +339,6 @@ class CInsertTextEditSession : public CEditSession {
  private:
   std::wstring _text;
   com_ptr<ITfComposition> _pComposition;
-  int _cursorBackCount;
 };
 
 STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
@@ -354,37 +351,16 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
   if (FAILED(_pComposition->GetRange(&pRange)))
     return E_FAIL;
 
-  APLOG(1, std::string("[InsertText] cursorBackCount=") +
-               std::to_string(_cursorBackCount) +
-               " textLen=" + std::to_string(_text.length()));
-
   if (FAILED(pRange->SetText(ec, 0, _text.c_str(),
                              static_cast<LONG>(_text.length()))))
     return E_FAIL;
 
-  if (_cursorBackCount > 0 &&
-      _cursorBackCount < static_cast<int>(_text.length())) {
-    // Position cursor at (length - cursorBackCount) from start
-    LONG target = static_cast<LONG>(_text.length()) - _cursorBackCount;
-    pRange->Collapse(ec, TF_ANCHOR_START);
-    LONG cch;
-    pRange->ShiftStart(ec, target, &cch, NULL);
-    APLOG(1, std::string("[InsertText] cursor back: target=") +
-                 std::to_string(target) +
-                 " shifted=" + std::to_string((long)cch));
-  } else {
-    pRange->Collapse(ec, TF_ANCHOR_END);
-  }
+  pRange->Collapse(ec, TF_ANCHOR_END);
 
   tfSelection.range = pRange;
   tfSelection.style.ase = TF_AE_NONE;
   tfSelection.style.fInterimChar = FALSE;
   _pContext->SetSelection(ec, 1, &tfSelection);
-
-  // End composition in the same edit session to avoid async timing issues
-  _pTextService->_ClearCompositionDisplayAttributes(ec, _pContext);
-  _pComposition->EndComposition(ec);
-  _pTextService->_FinalizeComposition();
 
   return hRet;
 }
@@ -394,8 +370,8 @@ BOOL WeaselTSF::_InsertText(com_ptr<ITfContext> pContext,
   CInsertTextEditSession* pEditSession;
   HRESULT hr;
 
-  if ((pEditSession = new CInsertTextEditSession(
-           this, pContext, _pComposition, text, _cursorBackCount)) != NULL) {
+  if ((pEditSession = new CInsertTextEditSession(this, pContext, _pComposition,
+                                                 text)) != NULL) {
     pContext->RequestEditSession(_tfClientId, pEditSession,
                                  TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
     pEditSession->Release();

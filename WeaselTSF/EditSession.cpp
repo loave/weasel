@@ -31,8 +31,6 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
   _UpdateLanguageBar(_status);
 
   if (ok) {
-    // record cursor_back_count for this commit (set by Lua auto_pair)
-    _cursorBackCount = config.cursor_back_count;
     if (!commit.empty()) {
       APLog(1, std::string("[EditSession] commit len=") +
                    std::to_string(commit.length()) + " cursor_back_count=" +
@@ -46,16 +44,7 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
                           _fCUASWorkaroundEnabled && !config.inline_preedit);
       }
       _InsertText(_pEditSessionContext, commit);
-      // When cursorBackCount > 0, EndComposition is done inside
-      // CInsertTextEditSession to keep cursor positioning atomic.
-      // Otherwise, end composition separately as before.
-      if (_cursorBackCount == 0) {
-        _EndComposition(_pEditSessionContext, false);
-      } else {
-        // InsertText already ended composition; just clean up UI
-        _cand->EndUI();
-        _cursorBackCount = 0;
-      }
+      _EndComposition(_pEditSessionContext, false);
       _committed = TRUE;
     } else {
       _committed = FALSE;
@@ -73,6 +62,21 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
   }
 
   _UpdateUI(*context, _status);
+
+  // auto_pair: move cursor back after commit_text (which bypasses TSF)
+  if (config.cursor_back_count > 0) {
+    APLOG(1, std::string("[EditSession] SendInput VK_LEFT x") +
+                 std::to_string(config.cursor_back_count));
+    INPUT inputs[2] = {};
+    inputs[0].type = INPUT_KEYBOARD;
+    inputs[0].ki.wVk = VK_LEFT;
+    inputs[1].type = INPUT_KEYBOARD;
+    inputs[1].ki.wVk = VK_LEFT;
+    inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    for (int i = 0; i < config.cursor_back_count; i++) {
+      SendInput(2, inputs, sizeof(INPUT));
+    }
+  }
 
   return TRUE;
 }
