@@ -357,28 +357,12 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
   APLOG(1, std::string("[InsertText] cursorBackCount=") +
                std::to_string(_cursorBackCount) +
                " textLen=" + std::to_string(_text.length()));
-  APLOG(2, std::string("[InsertText] text codepoints: ") +
-               autopair_log::DumpCodepoints(_text));
 
   if (FAILED(pRange->SetText(ec, 0, _text.c_str(),
                              static_cast<LONG>(_text.length()))))
     return E_FAIL;
 
-  if (_cursorBackCount > 0 &&
-      _cursorBackCount < static_cast<int>(_text.length())) {
-    // Move cursor back N characters from end (for auto_pair)
-    LONG target = static_cast<LONG>(_text.length()) - _cursorBackCount;
-    pRange->Collapse(ec, TF_ANCHOR_START);
-    LONG cch;
-    HRESULT hrShift = pRange->ShiftStart(ec, target, &cch, NULL);
-    APLOG(1, std::string("[InsertText] cursor back, target=") +
-                 std::to_string(target) +
-                 " shifted=" + std::to_string((long)cch) +
-                 " hr=" + std::to_string((long)hrShift));
-  } else {
-    // Normal: cursor at end
-    pRange->Collapse(ec, TF_ANCHOR_END);
-  }
+  pRange->Collapse(ec, TF_ANCHOR_END);
 
   tfSelection.range = pRange;
   tfSelection.style.ase = TF_AE_NONE;

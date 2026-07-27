@@ -85,6 +85,21 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
       }
       _InsertText(_pEditSessionContext, commit);
       _EndComposition(_pEditSessionContext, false);
+      // Move cursor back for auto_pair (simulate Left arrow keys)
+      if (_cursorBackCount > 0) {
+        APLog(1, std::string("[EditSession] sending Left key x") +
+                     std::to_string(_cursorBackCount));
+        INPUT inputs[2] = {};
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].ki.wVk = VK_LEFT;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].ki.wVk = VK_LEFT;
+        inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        for (int i = 0; i < _cursorBackCount; i++) {
+          SendInput(2, inputs, sizeof(INPUT));
+        }
+        _cursorBackCount = 0;
+      }
       _committed = TRUE;
     } else {
       _committed = FALSE;
