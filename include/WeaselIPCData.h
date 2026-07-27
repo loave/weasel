@@ -187,15 +187,9 @@ struct Status {
 
 // 用於向前端告知設置信息
 struct Config {
-  Config() : inline_preedit(false), cursor_back(false), cursor_back_count(0) {}
-  void reset() {
-    inline_preedit = false;
-    cursor_back = false;
-    cursor_back_count = 0;
-  }
+  Config() : inline_preedit(false) {}
+  void reset() { inline_preedit = false; }
   bool inline_preedit;
-  bool cursor_back;
-  int cursor_back_count;
 };
 
 struct UIStyle {
@@ -230,7 +224,6 @@ struct UIStyle {
   int candidate_abbreviate_length;
 
   bool inline_preedit;
-  bool cursor_back;  // auto_pair 成对符号上屏后光标回到中间
   bool display_tray_icon;
   bool ascii_tip_follow_cursor;
   bool paging_on_scroll;
@@ -308,7 +301,6 @@ struct UIStyle {
         comment_font_point(0),
         candidate_abbreviate_length(0),
         inline_preedit(false),
-        cursor_back(false),
         display_tray_icon(false),
         ascii_tip_follow_cursor(false),
         paging_on_scroll(false),
@@ -432,115 +424,113 @@ struct UIStyle {
   }
 };
 }  // namespace weasel
-// clang-format off
 namespace boost {
 namespace serialization {
 template <typename Archive>
 void serialize(Archive& ar, weasel::UIStyle& s, const unsigned int version) {
-  ar& s.font_face;
-  ar& s.label_font_face;
-  ar& s.comment_font_face;
-  ar& s.hover_type;
-  ar& s.font_point;
-  ar& s.label_font_point;
-  ar& s.comment_font_point;
-  ar& s.candidate_abbreviate_length;
-  ar& s.inline_preedit;
-  ar& s.align_type;
-  ar& s.antialias_mode;
-  ar& s.mark_text;
-  ar& s.preedit_type;
-  ar& s.display_tray_icon;
-  ar& s.ascii_tip_follow_cursor;
-  ar& s.current_zhung_icon;
-  ar& s.current_ascii_icon;
-  ar& s.current_half_icon;
-  ar& s.current_full_icon;
-  ar& s.enhanced_position;
-  ar& s.click_to_capture;
-  ar& s.label_text_format;
+  ar & s.font_face;
+  ar & s.label_font_face;
+  ar & s.comment_font_face;
+  ar & s.hover_type;
+  ar & s.font_point;
+  ar & s.label_font_point;
+  ar & s.comment_font_point;
+  ar & s.candidate_abbreviate_length;
+  ar & s.inline_preedit;
+  ar & s.align_type;
+  ar & s.antialias_mode;
+  ar & s.mark_text;
+  ar & s.preedit_type;
+  ar & s.display_tray_icon;
+  ar & s.ascii_tip_follow_cursor;
+  ar & s.current_zhung_icon;
+  ar & s.current_ascii_icon;
+  ar & s.current_half_icon;
+  ar & s.current_full_icon;
+  ar & s.enhanced_position;
+  ar & s.click_to_capture;
+  ar & s.label_text_format;
   // layout
-  ar& s.layout_type;
-  ar& s.vertical_text_left_to_right;
-  ar& s.vertical_text_with_wrap;
-  ar& s.paging_on_scroll;
-  ar& s.min_width;
-  ar& s.max_width;
-  ar& s.min_height;
-  ar& s.max_height;
-  ar& s.border;
-  ar& s.margin_x;
-  ar& s.margin_y;
-  ar& s.spacing;
-  ar& s.candidate_spacing;
-  ar& s.hilite_spacing;
-  ar& s.hilite_padding_x;
-  ar& s.hilite_padding_y;
-  ar& s.round_corner;
-  ar& s.round_corner_ex;
-  ar& s.shadow_radius;
-  ar& s.shadow_offset_x;
-  ar& s.shadow_offset_y;
-  ar& s.vertical_auto_reverse;
+  ar & s.layout_type;
+  ar & s.vertical_text_left_to_right;
+  ar & s.vertical_text_with_wrap;
+  ar & s.paging_on_scroll;
+  ar & s.min_width;
+  ar & s.max_width;
+  ar & s.min_height;
+  ar & s.max_height;
+  ar & s.border;
+  ar & s.margin_x;
+  ar & s.margin_y;
+  ar & s.spacing;
+  ar & s.candidate_spacing;
+  ar & s.hilite_spacing;
+  ar & s.hilite_padding_x;
+  ar & s.hilite_padding_y;
+  ar & s.round_corner;
+  ar & s.round_corner_ex;
+  ar & s.shadow_radius;
+  ar & s.shadow_offset_x;
+  ar & s.shadow_offset_y;
+  ar & s.vertical_auto_reverse;
   // color scheme
-  ar& s.text_color;
-  ar& s.candidate_text_color;
-  ar& s.candidate_back_color;
-  ar& s.candidate_shadow_color;
-  ar& s.candidate_border_color;
-  ar& s.label_text_color;
-  ar& s.comment_text_color;
-  ar& s.back_color;
-  ar& s.shadow_color;
-  ar& s.border_color;
-  ar& s.hilited_text_color;
-  ar& s.hilited_back_color;
-  ar& s.hilited_shadow_color;
-  ar& s.hilited_candidate_text_color;
-  ar& s.hilited_candidate_back_color;
-  ar& s.hilited_candidate_shadow_color;
-  ar& s.hilited_candidate_border_color;
-  ar& s.hilited_label_text_color;
-  ar& s.hilited_comment_text_color;
-  ar& s.hilited_mark_color;
-  ar& s.prevpage_color;
-  ar& s.nextpage_color;
+  ar & s.text_color;
+  ar & s.candidate_text_color;
+  ar & s.candidate_back_color;
+  ar & s.candidate_shadow_color;
+  ar & s.candidate_border_color;
+  ar & s.label_text_color;
+  ar & s.comment_text_color;
+  ar & s.back_color;
+  ar & s.shadow_color;
+  ar & s.border_color;
+  ar & s.hilited_text_color;
+  ar & s.hilited_back_color;
+  ar & s.hilited_shadow_color;
+  ar & s.hilited_candidate_text_color;
+  ar & s.hilited_candidate_back_color;
+  ar & s.hilited_candidate_shadow_color;
+  ar & s.hilited_candidate_border_color;
+  ar & s.hilited_label_text_color;
+  ar & s.hilited_comment_text_color;
+  ar & s.hilited_mark_color;
+  ar & s.prevpage_color;
+  ar & s.nextpage_color;
   // per client
-  ar& s.client_caps;
-  ar& s.baseline;
-  ar& s.linespacing;
+  ar & s.client_caps;
+  ar & s.baseline;
+  ar & s.linespacing;
 }
 
 template <typename Archive>
 void serialize(Archive& ar,
                weasel::CandidateInfo& s,
                const unsigned int version) {
-  ar& s.currentPage;
-  ar& s.totalPages;
-  ar& s.highlighted;
-  ar& s.is_last_page;
-  ar& s.candies;
-  ar& s.comments;
-  ar& s.labels;
+  ar & s.currentPage;
+  ar & s.totalPages;
+  ar & s.highlighted;
+  ar & s.is_last_page;
+  ar & s.candies;
+  ar & s.comments;
+  ar & s.labels;
 }
 template <typename Archive>
 void serialize(Archive& ar, weasel::Text& s, const unsigned int version) {
-  ar& s.str;
-  ar& s.attributes;
+  ar & s.str;
+  ar & s.attributes;
 }
 template <typename Archive>
 void serialize(Archive& ar,
                weasel::TextAttribute& s,
                const unsigned int version) {
-  ar& s.range;
-  ar& s.type;
+  ar & s.range;
+  ar & s.type;
 }
 template <typename Archive>
 void serialize(Archive& ar, weasel::TextRange& s, const unsigned int version) {
-  ar& s.start;
-  ar& s.end;
-  ar& s.cursor;
+  ar & s.start;
+  ar & s.end;
+  ar & s.cursor;
 }
 }  // namespace serialization
 }  // namespace boost
-// clang-format on

@@ -3,7 +3,6 @@
 #include "EditSession.h"
 #include "ResponseParser.h"
 #include "CandidateList.h"
-#include "AutoPairLog.h"
 
 /* Start Composition */
 class CStartCompositionEditSession : public CEditSession {
@@ -355,11 +354,13 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
                              static_cast<LONG>(_text.length()))))
     return E_FAIL;
 
+  /* update the selection to an insertion point just past the inserted text. */
   pRange->Collapse(ec, TF_ANCHOR_END);
 
   tfSelection.range = pRange;
   tfSelection.style.ase = TF_AE_NONE;
   tfSelection.style.fInterimChar = FALSE;
+
   _pContext->SetSelection(ec, 1, &tfSelection);
 
   return hRet;

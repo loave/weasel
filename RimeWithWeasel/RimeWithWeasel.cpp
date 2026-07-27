@@ -110,8 +110,6 @@ void RimeWithWeaselHandler::Initialize() {
     return;
   }
 
-  LOG(WARNING) << "[BUILD_MARKER] auto_pair_cursor_back 2027-1950";
-  OutputDebugStringA("[BUILD_MARKER] auto_pair_cursor_back 2027-1950\n");
   LOG(INFO) << "Initializing la rime.";
   rime_api->initialize(NULL);
   if (rime_api->start_maintenance(/*full_check = */ False)) {
@@ -738,6 +736,20 @@ inline std::string _GetLabelText(const std::vector<Text>& labels,
 }
 
 bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
+  // Deferred cursor-back: send VK_LEFT when Shift is released
+  if (m_pending_cursor_back > 0 && !(GetKeyState(VK_SHIFT) & 0x8000)) {
+    INPUT inputs[2] = {};
+    inputs[0].type = INPUT_KEYBOARD;
+    inputs[0].ki.wVk = VK_LEFT;
+    inputs[1].type = INPUT_KEYBOARD;
+    inputs[1].ki.wVk = VK_LEFT;
+    inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    for (int i = 0; i < m_pending_cursor_back; i++) {
+      SendInput(2, inputs, sizeof(INPUT));
+    }
+    m_pending_cursor_back = 0;
+  }
+
   std::wstring body;
   body.reserve(4096);
   std::vector<const char*> actions;
@@ -750,13 +762,35 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     actions.push_back("commit");
     std::wstring commit_text_w = escape_string(u8tow(commit.text));
     body.append(L"commit=").append(commit_text_w).append(L"\n");
-    OutputDebugStringA(
-        (std::string("[auto_pair] _Respond: get_commit=true, text='") +
-         commit.text + "'\n")
-            .c_str());
+    // auto_pair cursor-back: if commit is a 2-char paired symbol,
+    // defer VK_LEFT until Shift is released
+    std::wstring raw_commit = u8tow(commit.text);
+    if (raw_commit.length() == 2) {
+      static const wchar_t* pairs[] = {
+          L"()",           L"[]",           L"{}",           L"''",
+          L"\"\"",         L"<>",           L"``",           L"\xff08\xff09",
+          L"\x3010\x3011", L"\xff5b\xff5d", L"\x2018\x2019", L"\x201c\x201d",
+          L"\x300a\x300b", L"\xff40\xff40"};
+      for (auto p : pairs) {
+        if (raw_commit == p) {
+          if (GetKeyState(VK_SHIFT) & 0x8000) {
+            // Shift held: defer until release
+            m_pending_cursor_back = 1;
+          } else {
+            // No Shift: send immediately
+            INPUT inputs[2] = {};
+            inputs[0].type = INPUT_KEYBOARD;
+            inputs[0].ki.wVk = VK_LEFT;
+            inputs[1].type = INPUT_KEYBOARD;
+            inputs[1].ki.wVk = VK_LEFT;
+            inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(2, inputs, sizeof(INPUT));
+          }
+          break;
+        }
+      }
+    }
     rime_api->free_commit(&commit);
-  } else {
-    OutputDebugStringA("[auto_pair] _Respond: get_commit=false\n");
   }
 
   bool is_composing = false;
@@ -906,39 +940,6 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
   body.append(L"config.inline_preedit=")
       .append(std::to_wstring((int)session_status.style.inline_preedit))
       .append(L"\n");
-  body.append(L"config.cursor_back=")
-      .append(std::to_wstring((int)session_status.style.cursor_back))
-      .append(L"\n");
-  // auto_pair cursor offset: read from rime property set by Lua
-  {
-    char cursor_back_buf[16] = {0};
-    Bool got =
-        rime_api->get_property(session_id, "cursor_back_count", cursor_back_buf,
-                               sizeof(cursor_back_buf) - 1);
-    OutputDebugStringA((std::string("[auto_pair] get_property: got=") +
-                        std::to_string(got) + " buf='" + cursor_back_buf +
-                        "'\n")
-                           .c_str());
-    if (got) {
-      int cbc = atoi(cursor_back_buf);
-      if (cbc > 0) {
-        rime_api->set_property(session_id, "cursor_back_count", "");
-        OutputDebugStringA((std::string("[auto_pair] cursor_back_count=") +
-                            std::to_string(cbc) + " sending VK_LEFT\n")
-                               .c_str());
-        // Move cursor back by sending Left arrow keys
-        INPUT inputs[2] = {};
-        inputs[0].type = INPUT_KEYBOARD;
-        inputs[0].ki.wVk = VK_LEFT;
-        inputs[1].type = INPUT_KEYBOARD;
-        inputs[1].ki.wVk = VK_LEFT;
-        inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
-        for (int i = 0; i < cbc; i++) {
-          SendInput(2, inputs, sizeof(INPUT));
-        }
-      }
-    }
-  }
 
   // style
   if (!session_status.__synced) {
@@ -1229,7 +1230,6 @@ static void _UpdateUIStyle(RimeConfig* config, UI* ui, bool initialize) {
                  style.candidate_abbreviate_length, 0, 0, _abs);
   _RimeGetBool(config, "style/inline_preedit", initialize,
                style.inline_preedit);
-  _RimeGetBool(config, "style/cursor_back", initialize, style.cursor_back);
   _RimeGetBool(config, "style/vertical_auto_reverse", initialize,
                style.vertical_auto_reverse);
   static constexpr Array<UIStyle::PreeditType, 3> _preeditArr = {
