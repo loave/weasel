@@ -12,6 +12,8 @@
 #include <regex>
 #include <rime_api.h>
 
+#define OUTPUT_DEBUG(msg) OutputDebugStringA(msg)
+
 #define TRANSPARENT_COLOR 0x00000000
 #define ARGB2ABGR(value)                                 \
   ((value & 0xff000000) | ((value & 0x000000ff) << 16) | \
@@ -614,6 +616,12 @@ void RimeWithWeaselHandler::_LoadSchemaSpecificSettings(
     style.current_half_icon = load_icon(config, "schema/half_icon", NULL);
   }
   // load schema icon end
+  // load cursor_back_mode (auto_pair)
+  {
+    int mode = 0;
+    if (rime_api->config_get_int(&config, "style/cursor_back_mode", &mode))
+      m_cursor_back_mode = mode;
+  }
   rime_api->config_close(&config);
 }
 
@@ -736,8 +744,9 @@ inline std::string _GetLabelText(const std::vector<Text>& labels,
 }
 
 bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
-  // Deferred cursor-back: send VK_LEFT when Shift is released
+  // Deferred cursor-back (mode B): send VK_LEFT when Shift is released
   if (m_pending_cursor_back > 0 && !(GetKeyState(VK_SHIFT) & 0x8000)) {
+    OUTPUT_DEBUG("[auto_pair] deferred: sending VK_LEFT (Shift released)\n");
     INPUT inputs[2] = {};
     inputs[0].type = INPUT_KEYBOARD;
     inputs[0].ki.wVk = VK_LEFT;
@@ -762,31 +771,62 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     actions.push_back("commit");
     std::wstring commit_text_w = escape_string(u8tow(commit.text));
     body.append(L"commit=").append(commit_text_w).append(L"\n");
-    // auto_pair cursor-back: if commit is a 2-char paired symbol,
-    // defer VK_LEFT until Shift is released
-    std::wstring raw_commit = u8tow(commit.text);
-    if (raw_commit.length() == 2) {
-      static const wchar_t* pairs[] = {
-          L"()",           L"[]",           L"{}",           L"''",
-          L"\"\"",         L"<>",           L"``",           L"\xff08\xff09",
-          L"\x3010\x3011", L"\xff5b\xff5d", L"\x2018\x2019", L"\x201c\x201d",
-          L"\x300a\x300b", L"\xff40\xff40"};
-      for (auto p : pairs) {
-        if (raw_commit == p) {
-          if (GetKeyState(VK_SHIFT) & 0x8000) {
-            // Shift held: defer until release
-            m_pending_cursor_back = 1;
-          } else {
-            // No Shift: send immediately
-            INPUT inputs[2] = {};
-            inputs[0].type = INPUT_KEYBOARD;
-            inputs[0].ki.wVk = VK_LEFT;
-            inputs[1].type = INPUT_KEYBOARD;
-            inputs[1].ki.wVk = VK_LEFT;
-            inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(2, inputs, sizeof(INPUT));
+    // auto_pair cursor-back
+    if (m_cursor_back_mode > 0) {
+      std::wstring raw_commit = u8tow(commit.text);
+      if (raw_commit.length() == 2) {
+        static const wchar_t* pairs[] = {
+            L"()",           L"[]",           L"{}",           L"''",
+            L"\"\"",         L"<>",           L"``",           L"\xff08\xff09",
+            L"\x3010\x3011", L"\xff5b\xff5d", L"\x2018\x2019", L"\x201c\x201d",
+            L"\x300a\x300b", L"\xff40\xff40"};
+        for (auto p : pairs) {
+          if (raw_commit == p) {
+            if (m_cursor_back_mode == 2) {
+              // Mode C: atomic Shift-up + Left + Shift-down in one SendInput
+              bool shift_held = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+              OUTPUT_DEBUG(shift_held
+                               ? "[auto_pair] mode C: shift held, atomic send\n"
+                               : "[auto_pair] mode C: no shift, direct send\n");
+              INPUT inputs[4] = {};
+              int n = 0;
+              if (shift_held) {
+                inputs[n].type = INPUT_KEYBOARD;
+                inputs[n].ki.wVk = VK_SHIFT;
+                inputs[n].ki.dwFlags = KEYEVENTF_KEYUP;
+                n++;
+              }
+              inputs[n].type = INPUT_KEYBOARD;
+              inputs[n].ki.wVk = VK_LEFT;
+              n++;
+              inputs[n].type = INPUT_KEYBOARD;
+              inputs[n].ki.wVk = VK_LEFT;
+              inputs[n].ki.dwFlags = KEYEVENTF_KEYUP;
+              n++;
+              if (shift_held) {
+                inputs[n].type = INPUT_KEYBOARD;
+                inputs[n].ki.wVk = VK_SHIFT;
+                n++;
+              }
+              SendInput(n, inputs, sizeof(INPUT));
+            } else {
+              // Mode B: deferred until Shift release
+              if (GetKeyState(VK_SHIFT) & 0x8000) {
+                OUTPUT_DEBUG("[auto_pair] mode B: shift held, deferring\n");
+                m_pending_cursor_back = 1;
+              } else {
+                OUTPUT_DEBUG("[auto_pair] mode B: no shift, direct send\n");
+                INPUT inputs[2] = {};
+                inputs[0].type = INPUT_KEYBOARD;
+                inputs[0].ki.wVk = VK_LEFT;
+                inputs[1].type = INPUT_KEYBOARD;
+                inputs[1].ki.wVk = VK_LEFT;
+                inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+                SendInput(2, inputs, sizeof(INPUT));
+              }
+            }
+            break;
           }
-          break;
         }
       }
     }
