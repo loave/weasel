@@ -9,7 +9,7 @@ using namespace weasel;
 
 // [auto_pair] temp debug helper
 static void APDbg(const std::string& msg) {
-  OutputDebugStringA(("[V05][Parser] " + msg + "\n").c_str());
+  OutputDebugStringA(("[V06][Parser] " + msg + "\n").c_str());
 }
 static std::string W2A(const std::wstring& w) {
   std::string s;

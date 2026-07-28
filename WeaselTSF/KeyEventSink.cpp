@@ -11,11 +11,20 @@ static int keyCountToSimulate = 0;
 
 /* [auto_pair] Is this one of the keys we synthesized in _SendCursorBackKeys?
  *
- * A time window is used rather than an exact count: a single physical key
- * reaches _ProcessKeyEvent twice (OnTestKeyDown then OnKeyDown) whenever
- * pfEaten stays FALSE, so a counter would be consumed twice per key.
- * The window is also matched against the key code, so ordinary typing during
- * the window still goes to rime.
+ * Matched by key code within a short time window rather than by an exact
+ * count: a single physical key reaches _ProcessKeyEvent twice (OnTestKeyDown
+ * then OnKeyDown) whenever pfEaten stays FALSE, and the multiplier varies by
+ * application, so a counter cannot be balanced.
+ *
+ * VK_LEFT only. VK_SHIFT is deliberately excluded: our injected Shift release
+ * is indistinguishable from the user letting go of Shift, so suppressing it
+ * risks eating the real one and leaving rime convinced Shift is still held.
+ * See _SendCursorBackKeys for why rime does not need to be shielded from it.
+ *
+ * Swallowing VK_LEFT has no observable cost. pfEaten stays FALSE either way,
+ * so if the user really does press Left inside the window the application
+ * still moves the caret; only rime skips the key, and no composition is in
+ * flight at this point.
  */
 BOOL WeaselTSF::_IsAutoPairSynthKey(UINT vk) {
   if (_apSynthUntil == 0)
@@ -28,7 +37,7 @@ BOOL WeaselTSF::_IsAutoPairSynthKey(UINT vk) {
     _apSynthSeen = 0;
     return FALSE;
   }
-  if (vk != VK_LEFT && vk != VK_SHIFT)
+  if (vk != VK_LEFT)
     return FALSE;
   _apSynthSeen++;
   return TRUE;

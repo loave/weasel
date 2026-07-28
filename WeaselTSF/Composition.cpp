@@ -116,6 +116,10 @@ struct CursorBackPending {
   bool active = false;
   bool needKeys = false;  // TSF route failed, fall back to key injection
   bool injected = false;  // keys already sent, do not send twice
+  // Bumped on every schedule. An edit session that ended up running
+  // asynchronously carries the value it was created with, so a stale one can
+  // be recognised and its verdict discarded.
+  int generation = 0;
 };
 
 CursorBackPending g_cursorBack;
@@ -144,17 +148,36 @@ class CCursorBackEditSession : public CEditSession {
   CCursorBackEditSession(com_ptr<WeaselTSF> pTextService,
                          com_ptr<ITfContext> pContext,
                          int cursorBack,
-                         int attempt)
+                         int attempt,
+                         int targetOffset,
+                         int endOffset,
+                         int generation)
       : CEditSession(pTextService, pContext),
         _cursorBack(cursorBack),
-        _attempt(attempt) {}
+        _attempt(attempt),
+        _targetOffset(targetOffset),
+        _endOffset(endOffset),
+        _generation(generation) {}
 
   /* ITfEditSession */
   STDMETHODIMP DoEditSession(TfEditCookie ec);
 
  private:
+  // Own copies rather than reads of g_cursorBack: this session may run
+  // asynchronously, by which time a newer commit could have replaced it.
   int _cursorBack;
   int _attempt;
+  int _targetOffset;
+  int _endOffset;
+  int _generation;
+
+  bool _IsStale(const std::string& tag) const {
+    if (_generation == g_cursorBack.generation)
+      return false;
+    APLOG(tag + "stale (generation " + std::to_string(_generation) + " vs " +
+          std::to_string(g_cursorBack.generation) + "), verdict discarded");
+    return true;
+  }
 };
 
 STDAPI CCursorBackEditSession::DoEditSession(TfEditCookie ec) {
@@ -163,13 +186,14 @@ STDAPI CCursorBackEditSession::DoEditSession(TfEditCookie ec) {
     APLOG(tag + "no context");
     return S_OK;
   }
+  if (_IsStale(tag))
+    return S_OK;
 
   int cur = autopair::GetCursorOffset(_pContext, ec);
-  APLOG(tag + "offset now = " + std::to_string(cur) +
-        " target=" + std::to_string(g_cursorBack.targetOffset) +
-        " end=" + std::to_string(g_cursorBack.endOffset));
+  APLOG(tag + "offset now = " + std::to_string(cur) + " target=" +
+        std::to_string(_targetOffset) + " end=" + std::to_string(_endOffset));
 
-  if (cur >= 0 && cur == g_cursorBack.targetOffset) {
+  if (cur >= 0 && cur == _targetOffset) {
     APLOG(tag + "already at target, TSF route worked");
     g_cursorBack.active = false;
     return S_OK;
@@ -179,7 +203,7 @@ STDAPI CCursorBackEditSession::DoEditSession(TfEditCookie ec) {
   // composition (Chromium based apps, IMM32 compatibility layer) and has been
   // reset, or the app moved the caret itself. Either way SetSelection cannot
   // reach the real caret here, so fall back to injecting key presses.
-  if (g_cursorBack.endOffset >= 0 && cur != g_cursorBack.endOffset) {
+  if (_endOffset >= 0 && cur != _endOffset) {
     APLOG(tag + "caret not at expected end -> TSF route unusable, " +
           "will inject keys");
     g_cursorBack.needKeys = true;
@@ -237,13 +261,16 @@ void WeaselTSF::_ScheduleCursorBack(com_ptr<ITfContext> pContext,
   g_cursorBack.needKeys = targetOffset < 0;
   g_cursorBack.injected = false;
   g_cursorBack.active = true;
+  g_cursorBack.generation++;
   g_cursorBack.timerId =
       SetTimer(NULL, 0, kCursorBackDelays[0], CursorBackTimerProc);
 
   APLOG(std::string("[Deferred] scheduled timerId=") +
         std::to_string((unsigned long long)g_cursorBack.timerId) +
         " target=" + std::to_string(targetOffset) +
-        " end=" + std::to_string(g_cursorBack.endOffset));
+        " end=" + std::to_string(g_cursorBack.endOffset) +
+        " gen=" + std::to_string(g_cursorBack.generation) +
+        " needKeys=" + std::to_string((int)g_cursorBack.needKeys));
 }
 
 /* [auto_pair] Inject real VK_LEFT presses.
@@ -253,13 +280,29 @@ void WeaselTSF::_ScheduleCursorBack(com_ptr<ITfContext> pContext,
  * text store, so SetSelection cannot reach the real caret. Sending actual
  * key presses works everywhere.
  *
- * If the user is still holding Shift (which they are for （ 《 ｛ and friends)
- * a bare VK_LEFT would extend the selection instead of moving the caret, so
- * Shift is released around the arrow keys and restored afterwards.
+ * Shift handling. For the fullwidth pairs （ 《 ｛ ＂ the user is still holding
+ * Shift, and a bare VK_LEFT would extend a selection instead of moving the
+ * caret, so a Shift release is injected first.
  *
- * _ProcessKeyEvent drops all of these before they reach rime, otherwise
- * ascii_composer would see a Shift release without an intervening key and
- * toggle between Chinese and English. That is what broke earlier attempts.
+ * That release is deliberately NOT paired with a matching press afterwards:
+ *   - Restoring it would strand a press with no release if the user let go of
+ *     Shift in the meantime, leaving Shift stuck down for everything typed
+ *     after that. There is no API that reports the physical key state after
+ *     our own injection has already updated it, so that race cannot be closed.
+ *   - Rime does not need to be shielded from this release either. What
+ *     ascii_composer toggles on is a Shift press and release with no key in
+ *     between; here the symbol key sits in between, so the sequence it sees
+ *     (Shift down, symbol, Shift up) is an ordinary one and nothing toggles.
+ *     The user's own release arriving later is a harmless duplicate.
+ *
+ * The cost is that holding Shift and typing several pairs in a row only works
+ * for the first one, since the system now considers Shift released. Committing
+ * a pair puts the caret between the two symbols and typing continues there, so
+ * that sequence does not really occur.
+ *
+ * Only VK_LEFT is kept away from rime, in _ProcessKeyEvent. Doing the same for
+ * VK_SHIFT would be indistinguishable from the user's real release and would
+ * leave rime believing Shift is still held.
  */
 void WeaselTSF::_SendCursorBackKeys(int count) {
   if (count <= 0)
@@ -268,7 +311,9 @@ void WeaselTSF::_SendCursorBackKeys(int count) {
   if (count > 8)
     count = 8;
 
-  bool shiftHeld = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+  // GetAsyncKeyState, not GetKeyState: whether the user is physically holding
+  // Shift right now is what matters, not the state as of the last message.
+  bool shiftHeld = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 
   INPUT inputs[20] = {};
   UINT n = 0;
@@ -285,8 +330,6 @@ void WeaselTSF::_SendCursorBackKeys(int count) {
     push(VK_LEFT, KEYEVENTF_EXTENDEDKEY);
     push(VK_LEFT, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP);
   }
-  if (shiftHeld)
-    push(VK_SHIFT, 0);
 
   // Open the suppression window before sending, not after.
   _apSynthUntil = GetTickCount64() + 200;
@@ -298,7 +341,7 @@ void WeaselTSF::_SendCursorBackKeys(int count) {
   APLOG(std::string("[SendKeys] count=") + std::to_string(count) +
         " shiftHeld=" + std::to_string((int)shiftHeld) +
         " inputs=" + std::to_string(n) + " sent=" + std::to_string(sent) +
-        " err=" + std::to_string(err));
+        " err=" + std::to_string(err) + " (shift release not restored)");
 }
 
 void WeaselTSF::_RunCursorBackAttempt() {
@@ -314,8 +357,10 @@ void WeaselTSF::_RunCursorBackAttempt() {
   CCursorBackEditSession* pEditSession =
       g_cursorBack.needKeys
           ? NULL
-          : new CCursorBackEditSession(this, g_cursorBack.context,
-                                       g_cursorBack.cursorBack, attempt);
+          : new CCursorBackEditSession(
+                this, g_cursorBack.context, g_cursorBack.cursorBack, attempt,
+                g_cursorBack.targetOffset, g_cursorBack.endOffset,
+                g_cursorBack.generation);
   if (pEditSession != NULL) {
     HRESULT hrSession = S_OK;
     HRESULT hr = g_cursorBack.context->RequestEditSession(
