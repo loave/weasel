@@ -99,8 +99,7 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   weasel::UI* m_ui;  // reference
   DWORD m_active_session;
   bool m_disabled;
-  int m_pending_cursor_back = 0;  // deferred VK_LEFT count for auto_pair
-  int m_cursor_back_mode = 0;     // 0=off, 1=deferred(B), 2=atomic(C)
+  int m_cursor_back_mode = 0;  // [auto_pair] 0=off, 1=modeB, 3=modeF
   std::string m_last_schema_id;
   std::string m_last_app_name;
   weasel::UIStyle m_base_style;

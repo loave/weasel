@@ -1,0 +1,42 @@
+#pragma once
+// auto_pair 临时调试日志（调试完成后删除此文件）
+// 输出到 OutputDebugString（DebugView）和 %TEMP%\rime.weasel\auto_pair.log
+#include <windows.h>
+#include <cstdio>
+#include <fstream>
+#include <string>
+
+#define AUTOPAIR_VERSION "V01"
+
+namespace autopair {
+
+inline std::wstring GetLogPath() {
+  wchar_t buf[MAX_PATH] = {0};
+  if (ExpandEnvironmentStringsW(L"%TEMP%\\rime.weasel", buf, MAX_PATH) == 0)
+    return L"";
+  return std::wstring(buf) + L"\\auto_pair.log";
+}
+
+inline void Log(const std::string& msg) {
+  std::string line = "[" AUTOPAIR_VERSION "][DLL] " + msg;
+
+  OutputDebugStringA((line + "\n").c_str());
+
+  std::wstring path = GetLogPath();
+  if (path.empty())
+    return;
+  std::ofstream f(path, std::ios::app);
+  if (!f)
+    return;
+  SYSTEMTIME st;
+  GetLocalTime(&st);
+  char ts[64];
+  sprintf_s(ts, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond,
+            st.wMilliseconds);
+  f << ts << line << "\n";
+  f.flush();
+}
+
+}  // namespace autopair
+
+#define APLOG(msg) autopair::Log(msg)

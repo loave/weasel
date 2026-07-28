@@ -3,6 +3,7 @@
 #include "EditSession.h"
 #include "ResponseParser.h"
 #include "CandidateList.h"
+#include "AutoPairLog.h"
 
 /* Start Composition */
 class CStartCompositionEditSession : public CEditSession {
@@ -89,8 +90,11 @@ class CEndCompositionEditSession : public CEditSession {
   CEndCompositionEditSession(com_ptr<WeaselTSF> pTextService,
                              com_ptr<ITfContext> pContext,
                              com_ptr<ITfComposition> pComposition,
-                             BOOL clear = TRUE)
-      : CEditSession(pTextService, pContext), _clear(clear) {
+                             BOOL clear = TRUE,
+                             int cursorBack = 0)
+      : CEditSession(pTextService, pContext),
+        _clear(clear),
+        _cursorBack(cursorBack) {
     _pComposition = pComposition;
   }
 
@@ -100,6 +104,7 @@ class CEndCompositionEditSession : public CEditSession {
  private:
   com_ptr<ITfComposition> _pComposition;
   BOOL _clear;
+  int _cursorBack;
 };
 
 STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
@@ -119,16 +124,46 @@ STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
   _pComposition->EndComposition(ec);
   if (_pTextService)  // if _pTextService released, skip _FinalizeComposition
     _pTextService->_FinalizeComposition();
+
+  // [auto_pair] move cursor back in the same edit session, after
+  // EndComposition, so no other async session can override it
+  if (_cursorBack > 0) {
+    APLOG(std::string("[EndComp] cursorBack=") + std::to_string(_cursorBack));
+    TF_SELECTION sel;
+    ULONG fetched = 0;
+    if (SUCCEEDED(_pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel,
+                                          &fetched)) &&
+        fetched > 0) {
+      ITfRange* pRange = sel.range;
+      pRange->Collapse(ec, TF_ANCHOR_END);
+      LONG shifted = 0;
+      HRESULT hr = pRange->ShiftStart(ec, -_cursorBack, &shifted, NULL);
+      pRange->Collapse(ec, TF_ANCHOR_START);
+      TF_SELECTION newSel;
+      newSel.range = pRange;
+      newSel.style.ase = TF_AE_NONE;
+      newSel.style.fInterimChar = FALSE;
+      HRESULT hr2 = _pContext->SetSelection(ec, 1, &newSel);
+      APLOG(std::string("[EndComp] ShiftStart hr=") + std::to_string((long)hr) +
+            " shifted=" + std::to_string((long)shifted) +
+            " SetSelection hr=" + std::to_string((long)hr2));
+      pRange->Release();
+    } else {
+      APLOG("[EndComp] GetSelection failed");
+    }
+  }
   return S_OK;
 }
 
-void WeaselTSF::_EndComposition(com_ptr<ITfContext> pContext, BOOL clear) {
+void WeaselTSF::_EndComposition(com_ptr<ITfContext> pContext,
+                                BOOL clear,
+                                int cursorBack) {
   CEndCompositionEditSession* pEditSession;
   HRESULT hr;
 
   _cand->EndUI();
   if ((pEditSession = new CEndCompositionEditSession(
-           this, pContext, _pComposition, clear)) != NULL) {
+           this, pContext, _pComposition, clear, cursorBack)) != NULL) {
     pContext->RequestEditSession(_tfClientId, pEditSession,
                                  TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
     pEditSession->Release();

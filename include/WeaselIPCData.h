@@ -187,9 +187,13 @@ struct Status {
 
 // 用於向前端告知設置信息
 struct Config {
-  Config() : inline_preedit(false) {}
-  void reset() { inline_preedit = false; }
+  Config() : inline_preedit(false), cursor_back(0) {}
+  void reset() {
+    inline_preedit = false;
+    cursor_back = 0;
+  }
   bool inline_preedit;
+  int cursor_back;  // [auto_pair] 成对符号上屏后光标回退字符数
 };
 
 struct UIStyle {
