@@ -141,6 +141,34 @@ void CALLBACK CursorBackTimerProc(HWND, UINT, UINT_PTR id, DWORD) {
   svc->_RunCursorBackAttempt();
 }
 
+/* [auto_pair] Waiting for the user to let go of Shift before injecting the
+ * arrow keys. Only used for the pairs that need Shift (（ 《 ｛ ＂). */
+struct ShiftWaitPending {
+  com_ptr<WeaselTSF> service;
+  int count = 0;
+  int tries = 0;
+  UINT_PTR timerId = 0;
+  bool active = false;
+};
+
+ShiftWaitPending g_shiftWait;
+
+const UINT kShiftWaitInterval = 20;  // ms between polls
+const int kShiftWaitMaxTries = 25;   // give up after ~500ms
+
+void CALLBACK ShiftWaitTimerProc(HWND, UINT, UINT_PTR id, DWORD) {
+  KillTimer(NULL, id);
+  g_shiftWait.timerId = 0;
+  if (!g_shiftWait.active)
+    return;
+  com_ptr<WeaselTSF> svc = g_shiftWait.service;
+  if (svc == nullptr) {
+    g_shiftWait.active = false;
+    return;
+  }
+  svc->_RunShiftWait();
+}
+
 }  // namespace
 
 class CCursorBackEditSession : public CEditSession {
@@ -280,29 +308,23 @@ void WeaselTSF::_ScheduleCursorBack(com_ptr<ITfContext> pContext,
  * text store, so SetSelection cannot reach the real caret. Sending actual
  * key presses works everywhere.
  *
- * Shift handling. For the fullwidth pairs （ 《 ｛ ＂ the user is still holding
- * Shift, and a bare VK_LEFT would extend a selection instead of moving the
- * caret, so a Shift release is injected first.
+ * Shift is never touched. For the fullwidth pairs （ 《 ｛ ＂ the user is still
+ * holding it, and a bare VK_LEFT would extend a selection rather than move the
+ * caret, so in that case the injection waits for the user to let go first.
  *
- * That release is deliberately NOT paired with a matching press afterwards:
- *   - Restoring it would strand a press with no release if the user let go of
- *     Shift in the meantime, leaving Shift stuck down for everything typed
- *     after that. There is no API that reports the physical key state after
- *     our own injection has already updated it, so that race cannot be closed.
- *   - Rime does not need to be shielded from this release either. What
- *     ascii_composer toggles on is a Shift press and release with no key in
- *     between; here the symbol key sits in between, so the sequence it sees
- *     (Shift down, symbol, Shift up) is an ordinary one and nothing toggles.
- *     The user's own release arriving later is a harmless duplicate.
+ * Injecting a Shift release instead, as V05 and V06 did, is not worth it:
+ *   - Pairing it with a restoring press strands a press with no release if the
+ *     user let go meanwhile, leaving Shift stuck down for everything typed
+ *     afterwards. The race cannot be closed, since no API reports the physical
+ *     state once our own injection has updated it.
+ *   - Leaving it unpaired instead tells the system Shift is up while the user
+ *     still holds it, and rime sees a Shift release the user did not perform.
+ *     Whatever the exact mechanism, the Chinese/English toggling came back as
+ *     soon as that release was injected, so it is simply not sent any more.
  *
- * The cost is that holding Shift and typing several pairs in a row only works
- * for the first one, since the system now considers Shift released. Committing
- * a pair puts the caret between the two symbols and typing continues there, so
- * that sequence does not really occur.
- *
- * Only VK_LEFT is kept away from rime, in _ProcessKeyEvent. Doing the same for
- * VK_SHIFT would be indistinguishable from the user's real release and would
- * leave rime believing Shift is still held.
+ * Waiting costs a few tens of milliseconds on Shift pairs only, and the user is
+ * releasing Shift in that same moment anyway. Pairs that need no Shift ([ 【 )
+ * are injected immediately.
  */
 void WeaselTSF::_SendCursorBackKeys(int count) {
   if (count <= 0)
@@ -313,22 +335,71 @@ void WeaselTSF::_SendCursorBackKeys(int count) {
 
   // GetAsyncKeyState, not GetKeyState: whether the user is physically holding
   // Shift right now is what matters, not the state as of the last message.
-  bool shiftHeld = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+  if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) {
+    if (g_shiftWait.timerId != 0) {
+      KillTimer(NULL, g_shiftWait.timerId);
+      g_shiftWait.timerId = 0;
+    }
+    g_shiftWait.service = this;
+    g_shiftWait.count = count;
+    g_shiftWait.tries = 0;
+    g_shiftWait.active = true;
+    g_shiftWait.timerId =
+        SetTimer(NULL, 0, kShiftWaitInterval, ShiftWaitTimerProc);
+    APLOG(std::string("[SendKeys] shift is held, waiting for release before "
+                      "injecting; count=") +
+          std::to_string(count));
+    return;
+  }
 
-  INPUT inputs[20] = {};
+  _InjectLeftKeys(count);
+}
+
+/* [auto_pair] Poll until the user releases Shift, then inject. */
+void WeaselTSF::_RunShiftWait() {
+  g_shiftWait.tries++;
+  int waited = g_shiftWait.tries * kShiftWaitInterval;
+
+  if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) == 0) {
+    int count = g_shiftWait.count;
+    g_shiftWait.active = false;
+    g_shiftWait.service.Release();
+    APLOG(std::string("[ShiftWait] released after ~") + std::to_string(waited) +
+          "ms, injecting now");
+    _InjectLeftKeys(count);
+    return;
+  }
+
+  if (g_shiftWait.tries >= kShiftWaitMaxTries) {
+    g_shiftWait.active = false;
+    g_shiftWait.service.Release();
+    APLOG(std::string("[ShiftWait] still held after ") +
+          std::to_string(waited) + "ms, giving up; caret stays at the end");
+    return;
+  }
+
+  g_shiftWait.timerId =
+      SetTimer(NULL, 0, kShiftWaitInterval, ShiftWaitTimerProc);
+}
+
+/* [auto_pair] Send the arrow keys. Nothing but VK_LEFT is ever injected. */
+void WeaselTSF::_InjectLeftKeys(int count) {
+  if (count <= 0)
+    return;
+  if (count > 8)
+    count = 8;
+
+  INPUT inputs[16] = {};
   UINT n = 0;
-  auto push = [&](WORD vk, DWORD flags) {
-    inputs[n].type = INPUT_KEYBOARD;
-    inputs[n].ki.wVk = vk;
-    inputs[n].ki.dwFlags = flags;
-    n++;
-  };
-
-  if (shiftHeld)
-    push(VK_SHIFT, KEYEVENTF_KEYUP);
   for (int i = 0; i < count; ++i) {
-    push(VK_LEFT, KEYEVENTF_EXTENDEDKEY);
-    push(VK_LEFT, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP);
+    inputs[n].type = INPUT_KEYBOARD;
+    inputs[n].ki.wVk = VK_LEFT;
+    inputs[n].ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
+    n++;
+    inputs[n].type = INPUT_KEYBOARD;
+    inputs[n].ki.wVk = VK_LEFT;
+    inputs[n].ki.dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP;
+    n++;
   }
 
   // Open the suppression window before sending, not after.
@@ -338,10 +409,10 @@ void WeaselTSF::_SendCursorBackKeys(int count) {
   UINT sent = ::SendInput(n, inputs, sizeof(INPUT));
   DWORD err = (sent == n) ? 0 : GetLastError();
 
-  APLOG(std::string("[SendKeys] count=") + std::to_string(count) +
-        " shiftHeld=" + std::to_string((int)shiftHeld) +
+  APLOG(std::string("[SendKeys] injected VK_LEFT x") + std::to_string(count) +
         " inputs=" + std::to_string(n) + " sent=" + std::to_string(sent) +
-        " err=" + std::to_string(err) + " (shift release not restored)");
+        " err=" + std::to_string(err) + " shiftPhys=" +
+        std::to_string((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 1 : 0));
 }
 
 void WeaselTSF::_RunCursorBackAttempt() {

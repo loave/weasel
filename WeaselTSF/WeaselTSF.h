@@ -121,6 +121,8 @@ class WeaselTSF : public ITfTextInputProcessorEx,
    * in: inject real VK_LEFT presses. _ProcessKeyEvent drops the keys we
    * synthesize here so rime never sees them. */
   void _SendCursorBackKeys(int count);
+  void _RunShiftWait();
+  void _InjectLeftKeys(int count);
   BOOL _IsAutoPairSynthKey(UINT vk);
   /* deadline (GetTickCount64) until which synthesized keys are expected */
   ULONGLONG _apSynthUntil = 0;

@@ -7,8 +7,8 @@
 #include <fstream>
 #include <string>
 
-#define AUTOPAIR_VERSION "V06"
-#define AUTOPAIR_VERSION_W L"V06"
+#define AUTOPAIR_VERSION "V07"
+#define AUTOPAIR_VERSION_W L"V07"
 
 namespace autopair {
 
@@ -39,6 +39,12 @@ inline void Log(const std::string& msg) {
             st.wMilliseconds);
   f << ts << line << "\n";
   f.flush();
+}
+
+inline std::string Hex(unsigned long v) {
+  char b[24];
+  sprintf_s(b, "0x%lX", v);
+  return b;
 }
 
 }  // namespace autopair

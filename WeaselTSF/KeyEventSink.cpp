@@ -16,10 +16,10 @@ static int keyCountToSimulate = 0;
  * then OnKeyDown) whenever pfEaten stays FALSE, and the multiplier varies by
  * application, so a counter cannot be balanced.
  *
- * VK_LEFT only. VK_SHIFT is deliberately excluded: our injected Shift release
- * is indistinguishable from the user letting go of Shift, so suppressing it
- * risks eating the real one and leaving rime convinced Shift is still held.
- * See _SendCursorBackKeys for why rime does not need to be shielded from it.
+ * VK_LEFT only, which is now the only thing ever injected: the arrow keys wait
+ * for the user to release Shift rather than injecting a release themselves, so
+ * every VK_SHIFT reaching this sink is genuinely the user's and must be passed
+ * on to rime untouched. See _SendCursorBackKeys.
  *
  * Swallowing VK_LEFT has no observable cost. pfEaten stays FALSE either way,
  * so if the user really does press Left inside the window the application
@@ -44,12 +44,22 @@ BOOL WeaselTSF::_IsAutoPairSynthKey(UINT vk) {
 }
 
 void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
+  /* [auto_pair] trace every key reaching the sink. Both key state readings are
+   * logged: GetKeyState is what ConvertKeyEvent hands to rime, GetAsyncKeyState
+   * is the physical state. A disagreement between the two around an injection
+   * is what would explain rime seeing a Shift sequence we did not intend. */
+  APLOG(std::string("[Key] vk=") + autopair::Hex((unsigned long)wParam) +
+        " up=" + std::to_string((lParam & 0x80000000) ? 1 : 0) + " shiftMsg=" +
+        std::to_string((GetKeyState(VK_SHIFT) & 0x8000) ? 1 : 0) +
+        " shiftPhys=" +
+        std::to_string((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 1 : 0) +
+        " synthWindow=" + std::to_string(_apSynthUntil != 0 ? 1 : 0));
+
   /* [auto_pair] swallow our own synthesized caret-move keys: let the app act
-   * on them, but keep them away from rime so ascii_composer does not see a
-   * bogus Shift sequence and toggle between Chinese and English. */
+   * on them, but keep them away from rime. */
   if (_IsAutoPairSynthKey(static_cast<UINT>(wParam))) {
-    APLOG(std::string("[SynthKey] pass through vk=0x") +
-          std::to_string((unsigned long)wParam) +
+    APLOG(std::string("[SynthKey] pass through vk=") +
+          autopair::Hex((unsigned long)wParam) +
           " up=" + std::to_string((lParam & 0x80000000) ? 1 : 0) +
           " seen=" + std::to_string(_apSynthSeen) + " (not sent to rime)");
     *pfEaten = FALSE;

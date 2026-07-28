@@ -7,7 +7,7 @@
 #include <fstream>
 #include <string>
 
-#define AUTOPAIR_VERSION "V06"
+#define AUTOPAIR_VERSION "V07"
 
 namespace autopair {
 
@@ -36,6 +36,12 @@ inline void Log(const std::string& msg) {
             st.wMilliseconds);
   f << ts << line << "\n";
   f.flush();
+}
+
+inline std::string Hex(unsigned long v) {
+  char b[24];
+  sprintf_s(b, "0x%lX", v);
+  return b;
 }
 
 // 诊断用：返回光标相对文档起点的字符偏移，失败返回 -1

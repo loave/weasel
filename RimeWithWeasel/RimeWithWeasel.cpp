@@ -270,8 +270,31 @@ BOOL RimeWithWeaselHandler::ProcessKeyEvent(KeyEvent keyEvent,
   if (m_disabled)
     return FALSE;
   RimeSessionId session_id = to_session_id(ipc_id);
+
+  // [auto_pair] record exactly what rime is handed, and whether ascii_mode
+  // flips as a result. This is how we tell an actual toggle apart from a key
+  // state mismatch.
+  int ascii_before = rime_api->get_option(session_id, "ascii_mode") ? 1 : 0;
+
   Bool handled = rime_api->process_key(session_id, keyEvent.keycode,
                                        expand_ibus_modifier(keyEvent.mask));
+
+  int ascii_after = rime_api->get_option(session_id, "ascii_mode") ? 1 : 0;
+  {
+    std::string line =
+        "[Key->rime] keycode=" +
+        autopair::Hex((unsigned long)keyEvent.keycode) +
+        " mask=" + autopair::Hex((unsigned long)keyEvent.mask) + " release=" +
+        std::to_string((keyEvent.mask & ibus::Modifier::RELEASE_MASK) ? 1 : 0) +
+        " shiftMask=" +
+        std::to_string((keyEvent.mask & ibus::Modifier::SHIFT_MASK) ? 1 : 0) +
+        " handled=" + std::to_string((int)handled) +
+        " ascii=" + std::to_string(ascii_before);
+    if (ascii_after != ascii_before)
+      line +=
+          "->" + std::to_string(ascii_after) + "  *** ASCII MODE TOGGLED ***";
+    APLOG(line);
+  }
   // vim_mode when keydown only
   if (!handled && !(keyEvent.mask & ibus::Modifier::RELEASE_MASK)) {
     bool isVimBackInCommandMode =
