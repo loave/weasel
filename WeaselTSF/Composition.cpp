@@ -84,15 +84,24 @@ void WeaselTSF::_StartComposition(com_ptr<ITfContext> pContext,
   }
 }
 
-/* [auto_pair] Deferred cursor move.
+/* [auto_pair] Deferred cursor move, with key injection as the fallback.
  *
- * Moving the caret inside CEndCompositionEditSession does work (TSF reports
- * the new offset), but the application overwrites it when the edit
- * transaction completes and it flushes the composition result into its own
- * buffer. So we retry from the message loop, after that has happened.
+ * Moving the caret inside CEndCompositionEditSession works only in apps whose
+ * TSF text store models the whole editable document: Firefox and RichEdit do,
+ * and there the caret lands correctly. Chromium based apps expose only the
+ * composition text and reset the store when the composition ends, and apps
+ * going through the IMM32 compatibility layer get a throwaway document that
+ * only exists during composition. In both cases SetSelection reports success
+ * against a buffer that is no longer connected to the real caret.
  *
- * The retry is idempotent: it only acts when the caret sits exactly at the
- * end of the committed pair, and gives up if the user moved on.
+ * So a short while after the commit, from the message loop, we read the caret
+ * back. If it is where we put it, the TSF route worked and we are done. If it
+ * is anywhere else (a stale offset, or unreadable) the text store is useless
+ * to us and we inject real VK_LEFT presses instead.
+ *
+ * The probe is idempotent: it only moves the caret when it sits exactly at the
+ * end of the pair we just committed, so repeated attempts cannot walk the
+ * caret past the target.
  */
 namespace {
 
@@ -105,13 +114,15 @@ struct CursorBackPending {
   int attempt = 0;
   UINT_PTR timerId = 0;
   bool active = false;
+  bool needKeys = false;  // TSF route failed, fall back to key injection
+  bool injected = false;  // keys already sent, do not send twice
 };
 
 CursorBackPending g_cursorBack;
 
 // retry delays in ms, one per attempt
-const UINT kCursorBackDelays[] = {10, 40, 120};
-const int kCursorBackMaxAttempts = 3;
+const UINT kCursorBackDelays[] = {10, 40, 120, 200};
+const int kCursorBackMaxAttempts = 4;
 
 void CALLBACK CursorBackTimerProc(HWND, UINT, UINT_PTR id, DWORD) {
   KillTimer(NULL, id);
@@ -159,15 +170,19 @@ STDAPI CCursorBackEditSession::DoEditSession(TfEditCookie ec) {
         " end=" + std::to_string(g_cursorBack.endOffset));
 
   if (cur >= 0 && cur == g_cursorBack.targetOffset) {
-    APLOG(tag + "already at target, nothing to do");
+    APLOG(tag + "already at target, TSF route worked");
     g_cursorBack.active = false;
     return S_OK;
   }
-  // Only act when the caret is right after the pair we just committed.
-  // Anything else means the user kept typing or moved the caret.
+
+  // The caret is not where we put it. Either this text store only covers the
+  // composition (Chromium based apps, IMM32 compatibility layer) and has been
+  // reset, or the app moved the caret itself. Either way SetSelection cannot
+  // reach the real caret here, so fall back to injecting key presses.
   if (g_cursorBack.endOffset >= 0 && cur != g_cursorBack.endOffset) {
-    APLOG(tag + "caret elsewhere, give up");
-    g_cursorBack.active = false;
+    APLOG(tag + "caret not at expected end -> TSF route unusable, " +
+          "will inject keys");
+    g_cursorBack.needKeys = true;
     return S_OK;
   }
 
@@ -176,7 +191,8 @@ STDAPI CCursorBackEditSession::DoEditSession(TfEditCookie ec) {
   if (FAILED(_pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel,
                                      &fetched)) ||
       fetched == 0) {
-    APLOG(tag + "GetSelection failed");
+    APLOG(tag + "GetSelection failed -> will inject keys");
+    g_cursorBack.needKeys = true;
     return S_OK;
   }
 
@@ -216,6 +232,10 @@ void WeaselTSF::_ScheduleCursorBack(com_ptr<ITfContext> pContext,
   g_cursorBack.targetOffset = targetOffset;
   g_cursorBack.endOffset = targetOffset >= 0 ? targetOffset + cursorBack : -1;
   g_cursorBack.attempt = 0;
+  // A target we could not measure means the probe below cannot decide
+  // anything, so go straight to key injection.
+  g_cursorBack.needKeys = targetOffset < 0;
+  g_cursorBack.injected = false;
   g_cursorBack.active = true;
   g_cursorBack.timerId =
       SetTimer(NULL, 0, kCursorBackDelays[0], CursorBackTimerProc);
@@ -224,6 +244,61 @@ void WeaselTSF::_ScheduleCursorBack(com_ptr<ITfContext> pContext,
         std::to_string((unsigned long long)g_cursorBack.timerId) +
         " target=" + std::to_string(targetOffset) +
         " end=" + std::to_string(g_cursorBack.endOffset));
+}
+
+/* [auto_pair] Inject real VK_LEFT presses.
+ *
+ * Most apps (Chromium based ones, and anything going through the IMM32
+ * compatibility layer) expose only the composition text through their TSF
+ * text store, so SetSelection cannot reach the real caret. Sending actual
+ * key presses works everywhere.
+ *
+ * If the user is still holding Shift (which they are for （ 《 ｛ and friends)
+ * a bare VK_LEFT would extend the selection instead of moving the caret, so
+ * Shift is released around the arrow keys and restored afterwards.
+ *
+ * _ProcessKeyEvent drops all of these before they reach rime, otherwise
+ * ascii_composer would see a Shift release without an intervening key and
+ * toggle between Chinese and English. That is what broke earlier attempts.
+ */
+void WeaselTSF::_SendCursorBackKeys(int count) {
+  if (count <= 0)
+    return;
+
+  if (count > 8)
+    count = 8;
+
+  bool shiftHeld = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+
+  INPUT inputs[20] = {};
+  UINT n = 0;
+  auto push = [&](WORD vk, DWORD flags) {
+    inputs[n].type = INPUT_KEYBOARD;
+    inputs[n].ki.wVk = vk;
+    inputs[n].ki.dwFlags = flags;
+    n++;
+  };
+
+  if (shiftHeld)
+    push(VK_SHIFT, KEYEVENTF_KEYUP);
+  for (int i = 0; i < count; ++i) {
+    push(VK_LEFT, KEYEVENTF_EXTENDEDKEY);
+    push(VK_LEFT, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP);
+  }
+  if (shiftHeld)
+    push(VK_SHIFT, 0);
+
+  // Open the suppression window before sending, not after.
+  _apSynthUntil = GetTickCount64() + 200;
+  _apSynthSeen = 0;
+
+  UINT sent = ::SendInput(n, inputs, sizeof(INPUT));
+  DWORD err = (sent == n) ? 0 : GetLastError();
+
+  APLOG(std::string("[SendKeys] count=") + std::to_string(count) +
+        " shiftHeld=" + std::to_string((int)shiftHeld) +
+        " inputs=" + std::to_string(n) + " sent=" + std::to_string(sent) +
+        " err=" + std::to_string(err));
 }
 
 void WeaselTSF::_RunCursorBackAttempt() {
@@ -235,8 +310,12 @@ void WeaselTSF::_RunCursorBackAttempt() {
   g_cursorBack.attempt++;
   int attempt = g_cursorBack.attempt;
 
-  CCursorBackEditSession* pEditSession = new CCursorBackEditSession(
-      this, g_cursorBack.context, g_cursorBack.cursorBack, attempt);
+  // Probe the TSF route, unless a previous attempt already ruled it out.
+  CCursorBackEditSession* pEditSession =
+      g_cursorBack.needKeys
+          ? NULL
+          : new CCursorBackEditSession(this, g_cursorBack.context,
+                                       g_cursorBack.cursorBack, attempt);
   if (pEditSession != NULL) {
     HRESULT hrSession = S_OK;
     HRESULT hr = g_cursorBack.context->RequestEditSession(
@@ -254,10 +333,23 @@ void WeaselTSF::_RunCursorBackAttempt() {
     pEditSession->Release();
   }
 
+  // The probe above may have ruled out the TSF route. Inject keys once and
+  // stop: re-probing afterwards would only read the same stale text store.
+  if (g_cursorBack.active && g_cursorBack.needKeys && !g_cursorBack.injected) {
+    g_cursorBack.injected = true;
+    APLOG(std::string("[Deferred] falling back to key injection, cursorBack=") +
+          std::to_string(g_cursorBack.cursorBack));
+    _SendCursorBackKeys(g_cursorBack.cursorBack);
+    g_cursorBack.active = false;
+  }
+
   if (g_cursorBack.active && attempt < kCursorBackMaxAttempts) {
     g_cursorBack.timerId =
         SetTimer(NULL, 0, kCursorBackDelays[attempt], CursorBackTimerProc);
   } else {
+    APLOG(std::string("[Deferred] done, attempts=") + std::to_string(attempt) +
+          " needKeys=" + std::to_string((int)g_cursorBack.needKeys) +
+          " injected=" + std::to_string((int)g_cursorBack.injected));
     g_cursorBack.active = false;
     g_cursorBack.context.Release();
     g_cursorBack.service.Release();
@@ -355,7 +447,11 @@ STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
       if (_pTextService)
         _pTextService->_ScheduleCursorBack(_pContext, _cursorBack, after);
     } else {
-      APLOG("[EndComp] GetSelection failed");
+      // No selection to work with: schedule with an unmeasurable target so the
+      // deferred step goes straight to key injection.
+      APLOG("[EndComp] GetSelection failed -> schedule key injection");
+      if (_pTextService)
+        _pTextService->_ScheduleCursorBack(_pContext, _cursorBack, -1);
     }
   }
   return S_OK;

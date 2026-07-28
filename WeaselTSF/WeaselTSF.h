@@ -117,6 +117,14 @@ class WeaselTSF : public ITfTextInputProcessorEx,
                            int cursorBack,
                            int targetOffset);
   void _RunCursorBackAttempt();
+  /* [auto_pair] fallback for apps whose text store we cannot move the caret
+   * in: inject real VK_LEFT presses. _ProcessKeyEvent drops the keys we
+   * synthesize here so rime never sees them. */
+  void _SendCursorBackKeys(int count);
+  BOOL _IsAutoPairSynthKey(UINT vk);
+  /* deadline (GetTickCount64) until which synthesized keys are expected */
+  ULONGLONG _apSynthUntil = 0;
+  int _apSynthSeen = 0;
   void _EndComposition(com_ptr<ITfContext> pContext,
                        BOOL clear,
                        int cursorBack = 0);

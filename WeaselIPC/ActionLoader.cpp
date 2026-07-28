@@ -32,7 +32,7 @@ void ActionLoader::Store(Deserializer::KeyType const& key,
                     std::string a;
                     for (wchar_t c : action)
                       a += (char)(c < 128 ? c : '?');
-                    OutputDebugStringA(("[V04][ActionLoader] require '" + a +
+                    OutputDebugStringA(("[V05][ActionLoader] require '" + a +
                                         "' -> " + (ok ? "OK" : "FAIL") + "\n")
                                            .c_str());
                   });

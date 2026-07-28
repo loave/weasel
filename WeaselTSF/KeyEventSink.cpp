@@ -3,12 +3,49 @@
 #include "WeaselTSF.h"
 #include <KeyEvent.h>
 #include "CandidateList.h"
+#include "AutoPairLog.h"
 
 static weasel::KeyEvent prevKeyEvent;
 static BOOL prevfEaten = FALSE;
 static int keyCountToSimulate = 0;
 
+/* [auto_pair] Is this one of the keys we synthesized in _SendCursorBackKeys?
+ *
+ * A time window is used rather than an exact count: a single physical key
+ * reaches _ProcessKeyEvent twice (OnTestKeyDown then OnKeyDown) whenever
+ * pfEaten stays FALSE, so a counter would be consumed twice per key.
+ * The window is also matched against the key code, so ordinary typing during
+ * the window still goes to rime.
+ */
+BOOL WeaselTSF::_IsAutoPairSynthKey(UINT vk) {
+  if (_apSynthUntil == 0)
+    return FALSE;
+  ULONGLONG now = GetTickCount64();
+  if (now > _apSynthUntil) {
+    APLOG(std::string("[SynthKey] window expired, seen=") +
+          std::to_string(_apSynthSeen));
+    _apSynthUntil = 0;
+    _apSynthSeen = 0;
+    return FALSE;
+  }
+  if (vk != VK_LEFT && vk != VK_SHIFT)
+    return FALSE;
+  _apSynthSeen++;
+  return TRUE;
+}
+
 void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
+  /* [auto_pair] swallow our own synthesized caret-move keys: let the app act
+   * on them, but keep them away from rime so ascii_composer does not see a
+   * bogus Shift sequence and toggle between Chinese and English. */
+  if (_IsAutoPairSynthKey(static_cast<UINT>(wParam))) {
+    APLOG(std::string("[SynthKey] pass through vk=0x") +
+          std::to_string((unsigned long)wParam) +
+          " up=" + std::to_string((lParam & 0x80000000) ? 1 : 0) +
+          " seen=" + std::to_string(_apSynthSeen) + " (not sent to rime)");
+    *pfEaten = FALSE;
+    return;
+  }
   // when _IsKeyboardDisabled don't eat the key,
   // when keyboard closable and keyboard closed, don't eat the key
   if ((_isToOpenClose && !_IsKeyboardOpen()) || _IsKeyboardDisabled()) {
