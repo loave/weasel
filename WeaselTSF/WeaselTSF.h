@@ -112,23 +112,13 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   /* Composition */
   void _StartComposition(com_ptr<ITfContext> pContext,
                          BOOL fCUASWorkaroundEnabled);
-  /* [auto_pair] deferred caret move, driven by a message loop timer */
+  /* [auto_pair] Caret move that is retried from the message loop, so these two
+   * are driven by timer callbacks and have to stay reachable from outside. */
   void _ScheduleCursorBack(com_ptr<ITfContext> pContext,
                            int cursorBack,
                            int targetOffset);
   void _RunCursorBackAttempt();
-  /* [auto_pair] fallback for apps whose text store we cannot move the caret
-   * in: inject real VK_LEFT presses. _ProcessKeyEvent drops the keys we
-   * synthesize here so rime never sees them. */
-  void _SendCursorBackKeys(int count);
   void _RunShiftWait();
-  void _InjectLeftKeys(int count);
-  BOOL _IsAutoPairSynthKey(UINT vk);
-  /* deadline (GetTickCount64) until which synthesized keys are expected */
-  ULONGLONG _apSynthUntil = 0;
-  int _apSynthSeen = 0;
-  /* how long to wait for a Shift release, from style/cursor_back_wait_ms */
-  int _apShiftWaitMs = 1000;
   void _EndComposition(com_ptr<ITfContext> pContext,
                        BOOL clear,
                        int cursorBack = 0);
@@ -190,6 +180,13 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   void _UninitKeyEventSink();
   void _ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten);
 
+  /* [auto_pair] Fallback for apps whose text store we cannot move the caret in:
+   * inject real VK_LEFT presses. _ProcessKeyEvent drops the keys synthesized
+   * here so rime never sees them. */
+  void _SendCursorBackKeys(int count);
+  void _InjectLeftKeys(int count);
+  BOOL _IsAutoPairSynthKey(UINT vk);
+
   BOOL _InitPreservedKey();
   void _UninitPreservedKey();
 
@@ -222,6 +219,11 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   DWORD _dwTextEditSinkCookie, _dwTextLayoutSinkCookie;
   BYTE _lpbKeyState[256];
   BOOL _fTestKeyDownPending, _fTestKeyUpPending;
+  /* [auto_pair] deadline (GetTickCount64) until which injected keys are
+   * expected, and how long to wait for a Shift release
+   * (style/cursor_back_wait_ms) */
+  ULONGLONG _apSynthUntil = 0;
+  int _apShiftWaitMs = 1000;
 
   com_ptr<ITfContext> _pEditSessionContext;
   std::wstring _editSessionText;

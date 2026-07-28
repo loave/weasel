@@ -4,7 +4,6 @@
 #include <StringAlgorithm.hpp>
 #include <WeaselConstants.h>
 #include <WeaselUtility.h>
-#include "AutoPairLog.h"
 
 #include <filesystem>
 #include <map>
@@ -270,31 +269,8 @@ BOOL RimeWithWeaselHandler::ProcessKeyEvent(KeyEvent keyEvent,
   if (m_disabled)
     return FALSE;
   RimeSessionId session_id = to_session_id(ipc_id);
-
-  // [auto_pair] record exactly what rime is handed, and whether ascii_mode
-  // flips as a result. This is how we tell an actual toggle apart from a key
-  // state mismatch.
-  int ascii_before = rime_api->get_option(session_id, "ascii_mode") ? 1 : 0;
-
   Bool handled = rime_api->process_key(session_id, keyEvent.keycode,
                                        expand_ibus_modifier(keyEvent.mask));
-
-  int ascii_after = rime_api->get_option(session_id, "ascii_mode") ? 1 : 0;
-  {
-    std::string line =
-        "[Key->rime] keycode=" +
-        autopair::Hex((unsigned long)keyEvent.keycode) +
-        " mask=" + autopair::Hex((unsigned long)keyEvent.mask) + " release=" +
-        std::to_string((keyEvent.mask & ibus::Modifier::RELEASE_MASK) ? 1 : 0) +
-        " shiftMask=" +
-        std::to_string((keyEvent.mask & ibus::Modifier::SHIFT_MASK) ? 1 : 0) +
-        " handled=" + std::to_string((int)handled) +
-        " ascii=" + std::to_string(ascii_before);
-    if (ascii_after != ascii_before)
-      line +=
-          "->" + std::to_string(ascii_after) + "  *** ASCII MODE TOGGLED ***";
-    APLOG(line);
-  }
   // vim_mode when keydown only
   if (!handled && !(keyEvent.mask & ibus::Modifier::RELEASE_MASK)) {
     bool isVimBackInCommandMode =
@@ -657,10 +633,6 @@ void RimeWithWeaselHandler::_LoadSchemaSpecificSettings(
       m_cursor_back_wait_ms = wait_ms;
     else
       m_cursor_back_wait_ms = 1000;
-
-    APLOG(std::string("[LoadSchema] cursor_back_mode=") +
-          std::to_string(m_cursor_back_mode) +
-          " cursor_back_wait_ms=" + std::to_string(m_cursor_back_wait_ms));
   }
   rime_api->config_close(&config);
 }
@@ -797,16 +769,9 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     actions.push_back("commit");
     std::wstring raw_commit = u8tow(commit.text);
 
-    // [auto_pair] version marker: input '~' outputs '~' + version
-    if (raw_commit == L"~") {
-      raw_commit += AUTOPAIR_VERSION_W;
-      APLOG("[Respond] version marker '~' -> append version");
-    }
-
-    // [auto_pair] cursor-back: detect 2-char paired symbol.
-    // style/cursor_back_mode: 3 enables it, anything else disables it.
-    // (1 used to select an earlier SendInput-from-the-server approach that
-    // has since been removed; it is not a valid value any more.)
+    // [auto_pair] A commit that is exactly one of these pairs means the caret
+    // should end up between the two symbols. style/cursor_back_mode: 3 enables
+    // this, anything else disables it.
     if (m_cursor_back_mode == 3 && raw_commit.length() == 2) {
       static const wchar_t* pairs[] = {
           L"()",           L"[]",           L"{}",           L"''",
@@ -816,7 +781,6 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
       for (auto p : pairs) {
         if (raw_commit == p) {
           cursor_back = 1;
-          APLOG("[Respond] paired symbol detected, cursor_back=1");
           break;
         }
       }
@@ -826,8 +790,8 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     body.append(L"commit=").append(commit_text_w).append(L"\n");
     rime_api->free_commit(&commit);
   }
-  // [auto_pair] tell frontend to move cursor back (mode F)
-  // 'config' action is always pushed later; just append the body line here
+  // [auto_pair] tell the frontend to move the caret back.
+  // The 'config' action is pushed later; just append the body lines here.
   if (cursor_back > 0) {
     body.append(L"config.cursor_back=")
         .append(std::to_wstring(cursor_back))
@@ -835,8 +799,6 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     body.append(L"config.cursor_back_wait_ms=")
         .append(std::to_wstring(m_cursor_back_wait_ms))
         .append(L"\n");
-    APLOG(std::string("[Respond] appended config.cursor_back + wait_ms=") +
-          std::to_string(m_cursor_back_wait_ms) + " to body");
   }
 
   bool is_composing = false;
@@ -1011,25 +973,6 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
       actionList += actions[i];
     }
     header = std::wstring(L"action=") + u8tow(actionList) + L"\n";
-  }
-  // [auto_pair] log header and cursor_back-related body lines
-  if (cursor_back > 0) {
-    std::string h;
-    for (wchar_t c : header)
-      h += (char)(c < 128 ? c : '?');
-    APLOG("[Respond] header=" + h);
-    // dump body lines containing 'cursor_back'
-    size_t pos = body.find(L"config.cursor_back");
-    if (pos != std::wstring::npos) {
-      size_t eol = body.find(L'\n', pos);
-      std::wstring seg = body.substr(pos, eol - pos);
-      std::string s;
-      for (wchar_t c : seg)
-        s += (char)(c < 128 ? c : '?');
-      APLOG("[Respond] body has: " + s);
-    } else {
-      APLOG("[Respond] !! body does NOT contain config.cursor_back");
-    }
   }
   if (!eat(header))
     return false;

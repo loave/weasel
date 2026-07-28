@@ -2,7 +2,6 @@
 #include "WeaselTSF.h"
 #include "CandidateList.h"
 #include "ResponseParser.h"
-#include "AutoPairLog.h"
 
 STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
   // get commit string from server
@@ -13,10 +12,6 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
                                 &_cand->style());
 
   bool ok = m_client.GetResponseData(std::ref(parser));
-
-  APLOG(std::string("[DoEditSession] ok=") + std::to_string((int)ok) +
-        " commit_empty=" + std::to_string((int)commit.empty()) +
-        " cursor_back=" + std::to_string(config.cursor_back));
 
   _UpdateLanguageBar(_status);
 

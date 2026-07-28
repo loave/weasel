@@ -3,7 +3,57 @@
 #include "EditSession.h"
 #include "ResponseParser.h"
 #include "CandidateList.h"
-#include "AutoPairLog.h"
+
+namespace {
+
+/* [auto_pair] Character offset of the caret from the start of the document,
+ * or -1 if it cannot be determined.
+ *
+ * Used to decide whether a SetSelection actually reached the real caret: in
+ * apps whose text store only covers the composition, this reads back a stale
+ * value once the composition has ended.
+ */
+int GetCaretOffset(ITfContext* pContext, TfEditCookie ec) {
+  if (!pContext)
+    return -1;
+  TF_SELECTION sel;
+  ULONG fetched = 0;
+  if (FAILED(pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel,
+                                    &fetched)) ||
+      fetched == 0)
+    return -1;
+  ITfRange* pSel = sel.range;
+
+  ITfRange* pStart = nullptr;
+  int offset = -1;
+  if (SUCCEEDED(pContext->GetStart(ec, &pStart)) && pStart) {
+    ITfRange* pMeasure = nullptr;
+    if (SUCCEEDED(pStart->Clone(&pMeasure)) && pMeasure) {
+      if (SUCCEEDED(pMeasure->ShiftEndToRange(ec, pSel, TF_ANCHOR_START))) {
+        offset = 0;
+        WCHAR buf[256];
+        // Advance the start after each chunk, otherwise the range never moves
+        // and this loops forever on documents longer than the buffer.
+        for (int guard = 0; guard < 4096; ++guard) {
+          ULONG got = 0;
+          if (FAILED(pMeasure->GetText(ec, 0, buf, 256, &got)) || got == 0)
+            break;
+          offset += (int)got;
+          LONG shifted = 0;
+          if (FAILED(pMeasure->ShiftStart(ec, (LONG)got, &shifted, NULL)) ||
+              shifted == 0)
+            break;
+        }
+      }
+      pMeasure->Release();
+    }
+    pStart->Release();
+  }
+  pSel->Release();
+  return offset;
+}
+
+}  // namespace
 
 /* Start Composition */
 class CStartCompositionEditSession : public CEditSession {
@@ -179,13 +229,11 @@ class CCursorBackEditSession : public CEditSession {
   CCursorBackEditSession(com_ptr<WeaselTSF> pTextService,
                          com_ptr<ITfContext> pContext,
                          int cursorBack,
-                         int attempt,
                          int targetOffset,
                          int endOffset,
                          int generation)
       : CEditSession(pTextService, pContext),
         _cursorBack(cursorBack),
-        _attempt(attempt),
         _targetOffset(targetOffset),
         _endOffset(endOffset),
         _generation(generation) {}
@@ -197,35 +245,25 @@ class CCursorBackEditSession : public CEditSession {
   // Own copies rather than reads of g_cursorBack: this session may run
   // asynchronously, by which time a newer commit could have replaced it.
   int _cursorBack;
-  int _attempt;
   int _targetOffset;
   int _endOffset;
   int _generation;
 
-  bool _IsStale(const std::string& tag) const {
-    if (_generation == g_cursorBack.generation)
-      return false;
-    APLOG(tag + "stale (generation " + std::to_string(_generation) + " vs " +
-          std::to_string(g_cursorBack.generation) + "), verdict discarded");
-    return true;
-  }
+  bool _IsStale() const { return _generation != g_cursorBack.generation; }
 };
 
 STDAPI CCursorBackEditSession::DoEditSession(TfEditCookie ec) {
-  std::string tag = "[Deferred#" + std::to_string(_attempt) + "] ";
-  if (!_pContext) {
-    APLOG(tag + "no context");
+  if (!_pContext)
     return S_OK;
-  }
-  if (_IsStale(tag))
+  // A newer commit has replaced what this session was created for; its verdict
+  // no longer applies.
+  if (_IsStale())
     return S_OK;
 
-  int cur = autopair::GetCursorOffset(_pContext, ec);
-  APLOG(tag + "offset now = " + std::to_string(cur) + " target=" +
-        std::to_string(_targetOffset) + " end=" + std::to_string(_endOffset));
+  int cur = GetCaretOffset(_pContext, ec);
 
   if (cur >= 0 && cur == _targetOffset) {
-    APLOG(tag + "already at target, TSF route worked");
+    // The TSF route reached the real caret, nothing more to do.
     g_cursorBack.active = false;
     return S_OK;
   }
@@ -235,8 +273,6 @@ STDAPI CCursorBackEditSession::DoEditSession(TfEditCookie ec) {
   // reset, or the app moved the caret itself. Either way SetSelection cannot
   // reach the real caret here, so fall back to injecting key presses.
   if (_endOffset >= 0 && cur != _endOffset) {
-    APLOG(tag + "caret not at expected end -> TSF route unusable, " +
-          "will inject keys");
     g_cursorBack.needKeys = true;
     return S_OK;
   }
@@ -246,7 +282,6 @@ STDAPI CCursorBackEditSession::DoEditSession(TfEditCookie ec) {
   if (FAILED(_pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel,
                                      &fetched)) ||
       fetched == 0) {
-    APLOG(tag + "GetSelection failed -> will inject keys");
     g_cursorBack.needKeys = true;
     return S_OK;
   }
@@ -254,20 +289,14 @@ STDAPI CCursorBackEditSession::DoEditSession(TfEditCookie ec) {
   ITfRange* pRange = sel.range;
   pRange->Collapse(ec, TF_ANCHOR_END);
   LONG shifted = 0;
-  HRESULT hr = pRange->ShiftStart(ec, -_cursorBack, &shifted, NULL);
+  pRange->ShiftStart(ec, -_cursorBack, &shifted, NULL);
   pRange->Collapse(ec, TF_ANCHOR_START);
   TF_SELECTION newSel;
   newSel.range = pRange;
   newSel.style.ase = TF_AE_NONE;
   newSel.style.fInterimChar = FALSE;
-  HRESULT hr2 = _pContext->SetSelection(ec, 1, &newSel);
+  _pContext->SetSelection(ec, 1, &newSel);
   pRange->Release();
-
-  APLOG(tag + "ShiftStart hr=" + std::to_string((long)hr) +
-        " shifted=" + std::to_string((long)shifted) +
-        " SetSelection hr=" + std::to_string((long)hr2));
-  APLOG(tag + "offset after = " +
-        std::to_string(autopair::GetCursorOffset(_pContext, ec)));
   return S_OK;
 }
 
@@ -295,13 +324,6 @@ void WeaselTSF::_ScheduleCursorBack(com_ptr<ITfContext> pContext,
   g_cursorBack.generation++;
   g_cursorBack.timerId =
       SetTimer(NULL, 0, kCursorBackDelays[0], CursorBackTimerProc);
-
-  APLOG(std::string("[Deferred] scheduled timerId=") +
-        std::to_string((unsigned long long)g_cursorBack.timerId) +
-        " target=" + std::to_string(targetOffset) +
-        " end=" + std::to_string(g_cursorBack.endOffset) +
-        " gen=" + std::to_string(g_cursorBack.generation) +
-        " needKeys=" + std::to_string((int)g_cursorBack.needKeys));
 }
 
 /* [auto_pair] Inject real VK_LEFT presses.
@@ -315,7 +337,7 @@ void WeaselTSF::_ScheduleCursorBack(com_ptr<ITfContext> pContext,
  * holding it, and a bare VK_LEFT would extend a selection rather than move the
  * caret, so in that case the injection waits for the user to let go first.
  *
- * Injecting a Shift release instead, as V05 and V06 did, is not worth it:
+ * Injecting a Shift release instead was tried and abandoned:
  *   - Pairing it with a restoring press strands a press with no release if the
  *     user let go meanwhile, leaving Shift stuck down for everything typed
  *     afterwards. The race cannot be closed, since no API reports the physical
@@ -353,27 +375,22 @@ void WeaselTSF::_SendCursorBackKeys(int count) {
     g_shiftWait.active = true;
     g_shiftWait.timerId =
         SetTimer(NULL, 0, kShiftWaitInterval, ShiftWaitTimerProc);
-    APLOG(std::string("[SendKeys] shift is held, waiting for release before "
-                      "injecting; count=") +
-          std::to_string(count) + " budget=" + std::to_string(budget) +
-          "ms maxTries=" + std::to_string(g_shiftWait.maxTries));
     return;
   }
 
   _InjectLeftKeys(count);
 }
 
-/* [auto_pair] Poll until the user releases Shift, then inject. */
+/* [auto_pair] Poll until the user releases Shift, then inject. Gives up once
+ * the budget from style/cursor_back_wait_ms runs out, leaving the caret at the
+ * end rather than moving it into a selection. */
 void WeaselTSF::_RunShiftWait() {
   g_shiftWait.tries++;
-  int waited = g_shiftWait.tries * kShiftWaitInterval;
 
   if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) == 0) {
     int count = g_shiftWait.count;
     g_shiftWait.active = false;
     g_shiftWait.service.Release();
-    APLOG(std::string("[ShiftWait] released after ~") + std::to_string(waited) +
-          "ms, injecting now");
     _InjectLeftKeys(count);
     return;
   }
@@ -381,10 +398,6 @@ void WeaselTSF::_RunShiftWait() {
   if (g_shiftWait.tries >= g_shiftWait.maxTries) {
     g_shiftWait.active = false;
     g_shiftWait.service.Release();
-    APLOG(std::string("[ShiftWait] still held after ") +
-          std::to_string(waited) +
-          "ms (budget exhausted), giving up; caret stays at the end. "
-          "Raise style/cursor_back_wait_ms if this happens often");
     return;
   }
 
@@ -414,15 +427,8 @@ void WeaselTSF::_InjectLeftKeys(int count) {
 
   // Open the suppression window before sending, not after.
   _apSynthUntil = GetTickCount64() + 200;
-  _apSynthSeen = 0;
 
-  UINT sent = ::SendInput(n, inputs, sizeof(INPUT));
-  DWORD err = (sent == n) ? 0 : GetLastError();
-
-  APLOG(std::string("[SendKeys] injected VK_LEFT x") + std::to_string(count) +
-        " inputs=" + std::to_string(n) + " sent=" + std::to_string(sent) +
-        " err=" + std::to_string(err) + " shiftPhys=" +
-        std::to_string((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 1 : 0));
+  ::SendInput(n, inputs, sizeof(INPUT));
 }
 
 void WeaselTSF::_RunCursorBackAttempt() {
@@ -439,23 +445,20 @@ void WeaselTSF::_RunCursorBackAttempt() {
       g_cursorBack.needKeys
           ? NULL
           : new CCursorBackEditSession(
-                this, g_cursorBack.context, g_cursorBack.cursorBack, attempt,
+                this, g_cursorBack.context, g_cursorBack.cursorBack,
                 g_cursorBack.targetOffset, g_cursorBack.endOffset,
                 g_cursorBack.generation);
   if (pEditSession != NULL) {
     HRESULT hrSession = S_OK;
+    // Prefer synchronous so the verdict is available before this returns; fall
+    // back to async if TSF will not grant the lock right now.
     HRESULT hr = g_cursorBack.context->RequestEditSession(
         _tfClientId, pEditSession, TF_ES_SYNC | TF_ES_READWRITE, &hrSession);
     if (FAILED(hr)) {
-      APLOG(std::string("[Deferred] sync request failed hr=") +
-            std::to_string((long)hr) + ", retry async");
-      hr = g_cursorBack.context->RequestEditSession(
+      g_cursorBack.context->RequestEditSession(
           _tfClientId, pEditSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE,
           &hrSession);
     }
-    APLOG(std::string("[Deferred] attempt ") + std::to_string(attempt) +
-          " request hr=" + std::to_string((long)hr) +
-          " session hr=" + std::to_string((long)hrSession));
     pEditSession->Release();
   }
 
@@ -463,8 +466,6 @@ void WeaselTSF::_RunCursorBackAttempt() {
   // stop: re-probing afterwards would only read the same stale text store.
   if (g_cursorBack.active && g_cursorBack.needKeys && !g_cursorBack.injected) {
     g_cursorBack.injected = true;
-    APLOG(std::string("[Deferred] falling back to key injection, cursorBack=") +
-          std::to_string(g_cursorBack.cursorBack));
     _SendCursorBackKeys(g_cursorBack.cursorBack);
     g_cursorBack.active = false;
   }
@@ -473,9 +474,6 @@ void WeaselTSF::_RunCursorBackAttempt() {
     g_cursorBack.timerId =
         SetTimer(NULL, 0, kCursorBackDelays[attempt], CursorBackTimerProc);
   } else {
-    APLOG(std::string("[Deferred] done, attempts=") + std::to_string(attempt) +
-          " needKeys=" + std::to_string((int)g_cursorBack.needKeys) +
-          " injected=" + std::to_string((int)g_cursorBack.injected));
     g_cursorBack.active = false;
     g_cursorBack.context.Release();
     g_cursorBack.service.Release();
@@ -506,19 +504,12 @@ class CEndCompositionEditSession : public CEditSession {
 };
 
 STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
-  APLOG(std::string("[EndComp] enter, cursorBack=") +
-        std::to_string(_cursorBack) + " clear=" + std::to_string((int)_clear) +
-        " comp=" + std::to_string(_pComposition != nullptr ? 1 : 0));
   /* Clear the dummy text we set before, if any. */
-  if (_pComposition == nullptr) {
-    APLOG("[EndComp] early return: composition is null");
+  if (_pComposition == nullptr)
     return S_OK;
-  }
   // Avoid null pointer dereference
-  if (!_pTextService || !_pContext) {
-    APLOG("[EndComp] early return: textservice or context is null");
+  if (!_pTextService || !_pContext)
     return S_OK;
-  }
 
   _pTextService->_ClearCompositionDisplayAttributes(ec, _pContext);
 
@@ -530,54 +521,37 @@ STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
   if (_pTextService)  // if _pTextService released, skip _FinalizeComposition
     _pTextService->_FinalizeComposition();
 
-  // [auto_pair] move cursor back in the same edit session, after
-  // EndComposition, so no other async session can override it
+  /* [auto_pair] Move the caret back, in this same edit session and after
+   * EndComposition, so no other async session can override it. This is enough
+   * on its own for apps whose text store covers the whole document; for the
+   * rest the scheduled follow-up detects that it did not take and injects
+   * arrow keys instead. */
   if (_cursorBack > 0) {
-    APLOG(std::string("[EndComp] cursorBack=") + std::to_string(_cursorBack));
-    APLOG("[EndComp] offset before = " +
-          std::to_string(autopair::GetCursorOffset(_pContext, ec)));
-
     TF_SELECTION sel;
     ULONG fetched = 0;
     if (SUCCEEDED(_pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel,
                                           &fetched)) &&
         fetched > 0) {
       ITfRange* pRange = sel.range;
-
-      // log whether the selection is empty (a caret) or a range
-      BOOL isEmpty = FALSE;
-      pRange->IsEmpty(ec, &isEmpty);
-      APLOG(std::string("[EndComp] selection isEmpty=") +
-            std::to_string((int)isEmpty));
-
       pRange->Collapse(ec, TF_ANCHOR_END);
       LONG shifted = 0;
-      HRESULT hr = pRange->ShiftStart(ec, -_cursorBack, &shifted, NULL);
+      pRange->ShiftStart(ec, -_cursorBack, &shifted, NULL);
       pRange->Collapse(ec, TF_ANCHOR_START);
       TF_SELECTION newSel;
       newSel.range = pRange;
       newSel.style.ase = TF_AE_NONE;
       newSel.style.fInterimChar = FALSE;
-      HRESULT hr2 = _pContext->SetSelection(ec, 1, &newSel);
-      APLOG(std::string("[EndComp] ShiftStart hr=") + std::to_string((long)hr) +
-            " shifted=" + std::to_string((long)shifted) +
-            " SetSelection hr=" + std::to_string((long)hr2));
+      _pContext->SetSelection(ec, 1, &newSel);
       pRange->Release();
 
-      int after = autopair::GetCursorOffset(_pContext, ec);
-      APLOG("[EndComp] offset after = " + std::to_string(after));
-
-      // The app will very likely reset the caret to the end of the committed
-      // text once this edit transaction completes. Redo the move from the
-      // message loop.
+      // Where the caret should end up, for the follow-up to verify against.
+      int target = GetCaretOffset(_pContext, ec);
       if (_pTextService)
-        _pTextService->_ScheduleCursorBack(_pContext, _cursorBack, after);
-    } else {
-      // No selection to work with: schedule with an unmeasurable target so the
-      // deferred step goes straight to key injection.
-      APLOG("[EndComp] GetSelection failed -> schedule key injection");
-      if (_pTextService)
-        _pTextService->_ScheduleCursorBack(_pContext, _cursorBack, -1);
+        _pTextService->_ScheduleCursorBack(_pContext, _cursorBack, target);
+    } else if (_pTextService) {
+      // No selection to work with: an unmeasurable target makes the follow-up
+      // go straight to key injection.
+      _pTextService->_ScheduleCursorBack(_pContext, _cursorBack, -1);
     }
   }
   return S_OK;
@@ -595,11 +569,6 @@ void WeaselTSF::_EndComposition(com_ptr<ITfContext> pContext,
     pContext->RequestEditSession(_tfClientId, pEditSession,
                                  TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
     pEditSession->Release();
-    if (cursorBack > 0) {
-      APLOG(std::string("[_EndComposition] requested, cursorBack=") +
-            std::to_string(cursorBack) +
-            " RequestEditSession hr=" + std::to_string((long)hr));
-    }
   }
 }
 
@@ -812,9 +781,6 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
   com_ptr<ITfRange> pRange;
   TF_SELECTION tfSelection;
   HRESULT hRet = S_OK;
-
-  APLOG(std::string("[InsertText] enter, textLen=") +
-        std::to_string(_text.length()));
 
   if (_pComposition == nullptr)
     return E_FAIL;

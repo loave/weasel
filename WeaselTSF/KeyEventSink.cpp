@@ -3,7 +3,6 @@
 #include "WeaselTSF.h"
 #include <KeyEvent.h>
 #include "CandidateList.h"
-#include "AutoPairLog.h"
 
 static weasel::KeyEvent prevKeyEvent;
 static BOOL prevfEaten = FALSE;
@@ -29,39 +28,17 @@ static int keyCountToSimulate = 0;
 BOOL WeaselTSF::_IsAutoPairSynthKey(UINT vk) {
   if (_apSynthUntil == 0)
     return FALSE;
-  ULONGLONG now = GetTickCount64();
-  if (now > _apSynthUntil) {
-    APLOG(std::string("[SynthKey] window expired, seen=") +
-          std::to_string(_apSynthSeen));
+  if (GetTickCount64() > _apSynthUntil) {
     _apSynthUntil = 0;
-    _apSynthSeen = 0;
     return FALSE;
   }
-  if (vk != VK_LEFT)
-    return FALSE;
-  _apSynthSeen++;
-  return TRUE;
+  return vk == VK_LEFT;
 }
 
 void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
-  /* [auto_pair] trace every key reaching the sink. Both key state readings are
-   * logged: GetKeyState is what ConvertKeyEvent hands to rime, GetAsyncKeyState
-   * is the physical state. A disagreement between the two around an injection
-   * is what would explain rime seeing a Shift sequence we did not intend. */
-  APLOG(std::string("[Key] vk=") + autopair::Hex((unsigned long)wParam) +
-        " up=" + std::to_string((lParam & 0x80000000) ? 1 : 0) + " shiftMsg=" +
-        std::to_string((GetKeyState(VK_SHIFT) & 0x8000) ? 1 : 0) +
-        " shiftPhys=" +
-        std::to_string((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 1 : 0) +
-        " synthWindow=" + std::to_string(_apSynthUntil != 0 ? 1 : 0));
-
   /* [auto_pair] swallow our own synthesized caret-move keys: let the app act
    * on them, but keep them away from rime. */
   if (_IsAutoPairSynthKey(static_cast<UINT>(wParam))) {
-    APLOG(std::string("[SynthKey] pass through vk=") +
-          autopair::Hex((unsigned long)wParam) +
-          " up=" + std::to_string((lParam & 0x80000000) ? 1 : 0) +
-          " seen=" + std::to_string(_apSynthSeen) + " (not sent to rime)");
     *pfEaten = FALSE;
     return;
   }
