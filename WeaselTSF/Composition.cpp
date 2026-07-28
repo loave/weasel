@@ -136,12 +136,22 @@ STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
   // EndComposition, so no other async session can override it
   if (_cursorBack > 0) {
     APLOG(std::string("[EndComp] cursorBack=") + std::to_string(_cursorBack));
+    APLOG("[EndComp] offset before = " +
+          std::to_string(autopair::GetCursorOffset(_pContext, ec)));
+
     TF_SELECTION sel;
     ULONG fetched = 0;
     if (SUCCEEDED(_pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel,
                                           &fetched)) &&
         fetched > 0) {
       ITfRange* pRange = sel.range;
+
+      // log whether the selection is empty (a caret) or a range
+      BOOL isEmpty = FALSE;
+      pRange->IsEmpty(ec, &isEmpty);
+      APLOG(std::string("[EndComp] selection isEmpty=") +
+            std::to_string((int)isEmpty));
+
       pRange->Collapse(ec, TF_ANCHOR_END);
       LONG shifted = 0;
       HRESULT hr = pRange->ShiftStart(ec, -_cursorBack, &shifted, NULL);
@@ -155,6 +165,9 @@ STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
             " shifted=" + std::to_string((long)shifted) +
             " SetSelection hr=" + std::to_string((long)hr2));
       pRange->Release();
+
+      APLOG("[EndComp] offset after = " +
+            std::to_string(autopair::GetCursorOffset(_pContext, ec)));
     } else {
       APLOG("[EndComp] GetSelection failed");
     }
