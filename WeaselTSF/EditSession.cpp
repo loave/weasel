@@ -14,6 +14,10 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
 
   bool ok = m_client.GetResponseData(std::ref(parser));
 
+  APLOG(std::string("[DoEditSession] ok=") + std::to_string((int)ok) +
+        " commit_empty=" + std::to_string((int)commit.empty()) +
+        " cursor_back=" + std::to_string(config.cursor_back));
+
   _UpdateLanguageBar(_status);
 
   if (ok) {
@@ -27,10 +31,6 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
       _InsertText(_pEditSessionContext, commit);
       // [auto_pair] pass cursor_back so EndComposition handles it in the
       // same edit session (avoids async ordering issues)
-      if (config.cursor_back > 0) {
-        APLOG(std::string("[DoEditSession] cursor_back=") +
-              std::to_string(config.cursor_back));
-      }
       _EndComposition(_pEditSessionContext, false, config.cursor_back);
       _committed = TRUE;
     } else {

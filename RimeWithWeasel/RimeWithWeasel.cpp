@@ -792,6 +792,7 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     body.append(L"config.cursor_back=")
         .append(std::to_wstring(cursor_back))
         .append(L"\n");
+    APLOG("[Respond] appended config.cursor_back to body");
   }
 
   bool is_composing = false;
