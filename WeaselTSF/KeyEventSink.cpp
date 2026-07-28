@@ -3,6 +3,7 @@
 #include "WeaselTSF.h"
 #include <KeyEvent.h>
 #include "CandidateList.h"
+#include "AutoPairLog.h"
 
 static weasel::KeyEvent prevKeyEvent;
 static BOOL prevfEaten = FALSE;
@@ -39,6 +40,8 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
   /* [auto_pair] swallow our own synthesized caret-move keys: let the app act
    * on them, but keep them away from rime. */
   if (_IsAutoPairSynthKey(static_cast<UINT>(wParam))) {
+    APLOG(std::string("[SynthKey] VK_LEFT passed to app, kept from rime (up=") +
+          std::to_string((lParam & 0x80000000) ? 1 : 0) + ")");
     *pfEaten = FALSE;
     return;
   }
