@@ -1,13 +1,14 @@
 #pragma once
-// auto_pair 临时调试日志（调试完成后删除此文件）
-// 输出�?OutputDebugString（DebugView）和 %TEMP%\rime.weasel\auto_pair.log
+// auto_pair temporary debug log (delete this file when done debugging)
+// Writes to OutputDebugString (DebugView) and
+// %TEMP%\rime.weasel\auto_pair.log
 #include <windows.h>
 #include <cstdio>
 #include <fstream>
 #include <string>
 
-#define AUTOPAIR_VERSION "V03"
-#define AUTOPAIR_VERSION_W L"V03"
+#define AUTOPAIR_VERSION "V04"
+#define AUTOPAIR_VERSION_W L"V04"
 
 namespace autopair {
 

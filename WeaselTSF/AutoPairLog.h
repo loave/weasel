@@ -7,7 +7,7 @@
 #include <fstream>
 #include <string>
 
-#define AUTOPAIR_VERSION "V03"
+#define AUTOPAIR_VERSION "V04"
 
 namespace autopair {
 
@@ -59,14 +59,15 @@ inline int GetCursorOffset(ITfContext* pContext, TfEditCookie ec) {
       if (SUCCEEDED(pMeasure->ShiftEndToRange(ec, pSel, TF_ANCHOR_START))) {
         offset = 0;
         WCHAR buf[256];
-        ULONG got = 0;
-        // 循环读，累计长度
-        while (true) {
-          got = 0;
+        // 每读一段就把起点前移，否则 range 不推进会死循环
+        for (int guard = 0; guard < 4096; ++guard) {
+          ULONG got = 0;
           if (FAILED(pMeasure->GetText(ec, 0, buf, 256, &got)) || got == 0)
             break;
           offset += (int)got;
-          if (got < 256)
+          LONG shifted = 0;
+          if (FAILED(pMeasure->ShiftStart(ec, (LONG)got, &shifted, NULL)) ||
+              shifted == 0)
             break;
         }
       }

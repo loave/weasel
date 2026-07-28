@@ -112,6 +112,11 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   /* Composition */
   void _StartComposition(com_ptr<ITfContext> pContext,
                          BOOL fCUASWorkaroundEnabled);
+  /* [auto_pair] deferred caret move, driven by a message loop timer */
+  void _ScheduleCursorBack(com_ptr<ITfContext> pContext,
+                           int cursorBack,
+                           int targetOffset);
+  void _RunCursorBackAttempt();
   void _EndComposition(com_ptr<ITfContext> pContext,
                        BOOL clear,
                        int cursorBack = 0);

@@ -84,6 +84,186 @@ void WeaselTSF::_StartComposition(com_ptr<ITfContext> pContext,
   }
 }
 
+/* [auto_pair] Deferred cursor move.
+ *
+ * Moving the caret inside CEndCompositionEditSession does work (TSF reports
+ * the new offset), but the application overwrites it when the edit
+ * transaction completes and it flushes the composition result into its own
+ * buffer. So we retry from the message loop, after that has happened.
+ *
+ * The retry is idempotent: it only acts when the caret sits exactly at the
+ * end of the committed pair, and gives up if the user moved on.
+ */
+namespace {
+
+struct CursorBackPending {
+  com_ptr<WeaselTSF> service;
+  com_ptr<ITfContext> context;
+  int cursorBack = 0;
+  int targetOffset = -1;  // where we want the caret
+  int endOffset = -1;     // end of the committed pair
+  int attempt = 0;
+  UINT_PTR timerId = 0;
+  bool active = false;
+};
+
+CursorBackPending g_cursorBack;
+
+// retry delays in ms, one per attempt
+const UINT kCursorBackDelays[] = {10, 40, 120};
+const int kCursorBackMaxAttempts = 3;
+
+void CALLBACK CursorBackTimerProc(HWND, UINT, UINT_PTR id, DWORD) {
+  KillTimer(NULL, id);
+  g_cursorBack.timerId = 0;
+  if (!g_cursorBack.active)
+    return;
+  com_ptr<WeaselTSF> svc = g_cursorBack.service;
+  if (svc == nullptr) {
+    g_cursorBack.active = false;
+    return;
+  }
+  svc->_RunCursorBackAttempt();
+}
+
+}  // namespace
+
+class CCursorBackEditSession : public CEditSession {
+ public:
+  CCursorBackEditSession(com_ptr<WeaselTSF> pTextService,
+                         com_ptr<ITfContext> pContext,
+                         int cursorBack,
+                         int attempt)
+      : CEditSession(pTextService, pContext),
+        _cursorBack(cursorBack),
+        _attempt(attempt) {}
+
+  /* ITfEditSession */
+  STDMETHODIMP DoEditSession(TfEditCookie ec);
+
+ private:
+  int _cursorBack;
+  int _attempt;
+};
+
+STDAPI CCursorBackEditSession::DoEditSession(TfEditCookie ec) {
+  std::string tag = "[Deferred#" + std::to_string(_attempt) + "] ";
+  if (!_pContext) {
+    APLOG(tag + "no context");
+    return S_OK;
+  }
+
+  int cur = autopair::GetCursorOffset(_pContext, ec);
+  APLOG(tag + "offset now = " + std::to_string(cur) +
+        " target=" + std::to_string(g_cursorBack.targetOffset) +
+        " end=" + std::to_string(g_cursorBack.endOffset));
+
+  if (cur >= 0 && cur == g_cursorBack.targetOffset) {
+    APLOG(tag + "already at target, nothing to do");
+    g_cursorBack.active = false;
+    return S_OK;
+  }
+  // Only act when the caret is right after the pair we just committed.
+  // Anything else means the user kept typing or moved the caret.
+  if (g_cursorBack.endOffset >= 0 && cur != g_cursorBack.endOffset) {
+    APLOG(tag + "caret elsewhere, give up");
+    g_cursorBack.active = false;
+    return S_OK;
+  }
+
+  TF_SELECTION sel;
+  ULONG fetched = 0;
+  if (FAILED(_pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel,
+                                     &fetched)) ||
+      fetched == 0) {
+    APLOG(tag + "GetSelection failed");
+    return S_OK;
+  }
+
+  ITfRange* pRange = sel.range;
+  pRange->Collapse(ec, TF_ANCHOR_END);
+  LONG shifted = 0;
+  HRESULT hr = pRange->ShiftStart(ec, -_cursorBack, &shifted, NULL);
+  pRange->Collapse(ec, TF_ANCHOR_START);
+  TF_SELECTION newSel;
+  newSel.range = pRange;
+  newSel.style.ase = TF_AE_NONE;
+  newSel.style.fInterimChar = FALSE;
+  HRESULT hr2 = _pContext->SetSelection(ec, 1, &newSel);
+  pRange->Release();
+
+  APLOG(tag + "ShiftStart hr=" + std::to_string((long)hr) +
+        " shifted=" + std::to_string((long)shifted) +
+        " SetSelection hr=" + std::to_string((long)hr2));
+  APLOG(tag + "offset after = " +
+        std::to_string(autopair::GetCursorOffset(_pContext, ec)));
+  return S_OK;
+}
+
+void WeaselTSF::_ScheduleCursorBack(com_ptr<ITfContext> pContext,
+                                    int cursorBack,
+                                    int targetOffset) {
+  if (cursorBack <= 0 || pContext == nullptr)
+    return;
+
+  if (g_cursorBack.timerId != 0) {
+    KillTimer(NULL, g_cursorBack.timerId);
+    g_cursorBack.timerId = 0;
+  }
+  g_cursorBack.service = this;
+  g_cursorBack.context = pContext;
+  g_cursorBack.cursorBack = cursorBack;
+  g_cursorBack.targetOffset = targetOffset;
+  g_cursorBack.endOffset = targetOffset >= 0 ? targetOffset + cursorBack : -1;
+  g_cursorBack.attempt = 0;
+  g_cursorBack.active = true;
+  g_cursorBack.timerId =
+      SetTimer(NULL, 0, kCursorBackDelays[0], CursorBackTimerProc);
+
+  APLOG(std::string("[Deferred] scheduled timerId=") +
+        std::to_string((unsigned long long)g_cursorBack.timerId) +
+        " target=" + std::to_string(targetOffset) +
+        " end=" + std::to_string(g_cursorBack.endOffset));
+}
+
+void WeaselTSF::_RunCursorBackAttempt() {
+  if (!g_cursorBack.active || g_cursorBack.context == nullptr) {
+    g_cursorBack.active = false;
+    return;
+  }
+
+  g_cursorBack.attempt++;
+  int attempt = g_cursorBack.attempt;
+
+  CCursorBackEditSession* pEditSession = new CCursorBackEditSession(
+      this, g_cursorBack.context, g_cursorBack.cursorBack, attempt);
+  if (pEditSession != NULL) {
+    HRESULT hrSession = S_OK;
+    HRESULT hr = g_cursorBack.context->RequestEditSession(
+        _tfClientId, pEditSession, TF_ES_SYNC | TF_ES_READWRITE, &hrSession);
+    if (FAILED(hr)) {
+      APLOG(std::string("[Deferred] sync request failed hr=") +
+            std::to_string((long)hr) + ", retry async");
+      hr = g_cursorBack.context->RequestEditSession(
+          _tfClientId, pEditSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE,
+          &hrSession);
+    }
+    APLOG(std::string("[Deferred] attempt ") + std::to_string(attempt) +
+          " request hr=" + std::to_string((long)hr) +
+          " session hr=" + std::to_string((long)hrSession));
+    pEditSession->Release();
+  }
+
+  if (g_cursorBack.active && attempt < kCursorBackMaxAttempts) {
+    g_cursorBack.timerId =
+        SetTimer(NULL, 0, kCursorBackDelays[attempt], CursorBackTimerProc);
+  } else {
+    g_cursorBack.active = false;
+    g_cursorBack.context.Release();
+    g_cursorBack.service.Release();
+  }
+}
+
 /* End Composition */
 class CEndCompositionEditSession : public CEditSession {
  public:
@@ -166,8 +346,14 @@ STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
             " SetSelection hr=" + std::to_string((long)hr2));
       pRange->Release();
 
-      APLOG("[EndComp] offset after = " +
-            std::to_string(autopair::GetCursorOffset(_pContext, ec)));
+      int after = autopair::GetCursorOffset(_pContext, ec);
+      APLOG("[EndComp] offset after = " + std::to_string(after));
+
+      // The app will very likely reset the caret to the end of the committed
+      // text once this edit transaction completes. Redo the move from the
+      // message loop.
+      if (_pTextService)
+        _pTextService->_ScheduleCursorBack(_pContext, _cursorBack, after);
     } else {
       APLOG("[EndComp] GetSelection failed");
     }
