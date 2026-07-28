@@ -638,15 +638,29 @@ void RimeWithWeaselHandler::_LoadSchemaSpecificSettings(
     style.current_half_icon = load_icon(config, "schema/half_icon", NULL);
   }
   // load schema icon end
-  // [auto_pair] load cursor_back_mode
+  // [auto_pair] load cursor_back settings
   {
     int mode = 0;
     if (rime_api->config_get_int(&config, "style/cursor_back_mode", &mode))
       m_cursor_back_mode = mode;
     else
       m_cursor_back_mode = 0;
+
+    // How long to wait for the user to release Shift before giving up on
+    // moving the caret. Measured hold times run 120-380ms, so the default is
+    // generous: waiting longer is free, timing out means the caret just stays
+    // at the end and the feature silently does nothing.
+    int wait_ms = 0;
+    if (rime_api->config_get_int(&config, "style/cursor_back_wait_ms",
+                                 &wait_ms) &&
+        wait_ms > 0)
+      m_cursor_back_wait_ms = wait_ms;
+    else
+      m_cursor_back_wait_ms = 1000;
+
     APLOG(std::string("[LoadSchema] cursor_back_mode=") +
-          std::to_string(m_cursor_back_mode));
+          std::to_string(m_cursor_back_mode) +
+          " cursor_back_wait_ms=" + std::to_string(m_cursor_back_wait_ms));
   }
   rime_api->config_close(&config);
 }
@@ -789,7 +803,10 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
       APLOG("[Respond] version marker '~' -> append version");
     }
 
-    // [auto_pair] cursor-back: detect 2-char paired symbol
+    // [auto_pair] cursor-back: detect 2-char paired symbol.
+    // style/cursor_back_mode: 3 enables it, anything else disables it.
+    // (1 used to select an earlier SendInput-from-the-server approach that
+    // has since been removed; it is not a valid value any more.)
     if (m_cursor_back_mode == 3 && raw_commit.length() == 2) {
       static const wchar_t* pairs[] = {
           L"()",           L"[]",           L"{}",           L"''",
@@ -815,7 +832,11 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     body.append(L"config.cursor_back=")
         .append(std::to_wstring(cursor_back))
         .append(L"\n");
-    APLOG("[Respond] appended config.cursor_back to body");
+    body.append(L"config.cursor_back_wait_ms=")
+        .append(std::to_wstring(m_cursor_back_wait_ms))
+        .append(L"\n");
+    APLOG(std::string("[Respond] appended config.cursor_back + wait_ms=") +
+          std::to_string(m_cursor_back_wait_ms) + " to body");
   }
 
   bool is_composing = false;

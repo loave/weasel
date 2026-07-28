@@ -147,14 +147,17 @@ struct ShiftWaitPending {
   com_ptr<WeaselTSF> service;
   int count = 0;
   int tries = 0;
+  int maxTries = 0;
   UINT_PTR timerId = 0;
   bool active = false;
 };
 
 ShiftWaitPending g_shiftWait;
 
-const UINT kShiftWaitInterval = 20;  // ms between polls
-const int kShiftWaitMaxTries = 25;   // give up after ~500ms
+// 5ms rather than something coarser: the caret should land as close to the
+// moment of release as possible, and this only runs while a Shift pair is
+// pending, never during normal typing.
+const UINT kShiftWaitInterval = 5;
 
 void CALLBACK ShiftWaitTimerProc(HWND, UINT, UINT_PTR id, DWORD) {
   KillTimer(NULL, id);
@@ -340,15 +343,20 @@ void WeaselTSF::_SendCursorBackKeys(int count) {
       KillTimer(NULL, g_shiftWait.timerId);
       g_shiftWait.timerId = 0;
     }
+    int budget = _apShiftWaitMs > 0 ? _apShiftWaitMs : 1000;
     g_shiftWait.service = this;
     g_shiftWait.count = count;
     g_shiftWait.tries = 0;
+    g_shiftWait.maxTries = budget / (int)kShiftWaitInterval;
+    if (g_shiftWait.maxTries < 1)
+      g_shiftWait.maxTries = 1;
     g_shiftWait.active = true;
     g_shiftWait.timerId =
         SetTimer(NULL, 0, kShiftWaitInterval, ShiftWaitTimerProc);
     APLOG(std::string("[SendKeys] shift is held, waiting for release before "
                       "injecting; count=") +
-          std::to_string(count));
+          std::to_string(count) + " budget=" + std::to_string(budget) +
+          "ms maxTries=" + std::to_string(g_shiftWait.maxTries));
     return;
   }
 
@@ -370,11 +378,13 @@ void WeaselTSF::_RunShiftWait() {
     return;
   }
 
-  if (g_shiftWait.tries >= kShiftWaitMaxTries) {
+  if (g_shiftWait.tries >= g_shiftWait.maxTries) {
     g_shiftWait.active = false;
     g_shiftWait.service.Release();
     APLOG(std::string("[ShiftWait] still held after ") +
-          std::to_string(waited) + "ms, giving up; caret stays at the end");
+          std::to_string(waited) +
+          "ms (budget exhausted), giving up; caret stays at the end. "
+          "Raise style/cursor_back_wait_ms if this happens often");
     return;
   }
 

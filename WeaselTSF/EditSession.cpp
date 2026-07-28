@@ -29,6 +29,10 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
                           _fCUASWorkaroundEnabled && !config.inline_preedit);
       }
       _InsertText(_pEditSessionContext, commit);
+      // [auto_pair] stash the Shift wait budget before ending the composition,
+      // since that is what schedules the caret move
+      if (config.cursor_back_wait_ms > 0)
+        _apShiftWaitMs = config.cursor_back_wait_ms;
       // [auto_pair] pass cursor_back so EndComposition handles it in the
       // same edit session (avoids async ordering issues)
       _EndComposition(_pEditSessionContext, false, config.cursor_back);

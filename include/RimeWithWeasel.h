@@ -99,7 +99,10 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   weasel::UI* m_ui;  // reference
   DWORD m_active_session;
   bool m_disabled;
-  int m_cursor_back_mode = 0;  // [auto_pair] 0=off, 1=modeB, 3=modeF
+  // [auto_pair] 3 = 成对符号上屏后把光标移到中间，其他值 = 关闭
+  int m_cursor_back_mode = 0;
+  // [auto_pair] 按住 Shift 时最多等多久（毫秒）再放弃移动光标
+  int m_cursor_back_wait_ms = 1000;
   std::string m_last_schema_id;
   std::string m_last_app_name;
   weasel::UIStyle m_base_style;

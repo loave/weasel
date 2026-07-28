@@ -127,6 +127,8 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   /* deadline (GetTickCount64) until which synthesized keys are expected */
   ULONGLONG _apSynthUntil = 0;
   int _apSynthSeen = 0;
+  /* how long to wait for a Shift release, from style/cursor_back_wait_ms */
+  int _apShiftWaitMs = 1000;
   void _EndComposition(com_ptr<ITfContext> pContext,
                        BOOL clear,
                        int cursorBack = 0);
