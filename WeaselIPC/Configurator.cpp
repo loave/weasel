@@ -29,7 +29,7 @@ void Configurator::Store(Deserializer::KeyType const& key,
     for (wchar_t c : value)
       v += (char)(c < 128 ? c : '?');
     OutputDebugStringA(
-        ("[V01][Configurator] key=" + k + " value=" + v + "\n").c_str());
+        ("[V02][Configurator] key=" + k + " value=" + v + "\n").c_str());
   }
   if (!m_pTarget->p_context || key.size() < 2)
     return;
@@ -38,7 +38,7 @@ void Configurator::Store(Deserializer::KeyType const& key,
     m_pTarget->p_config->inline_preedit = bool_value;
   } else if (key[1] == L"cursor_back") {
     m_pTarget->p_config->cursor_back = _wtoi(value.c_str());
-    OutputDebugStringA(("[V01][Configurator] cursor_back set to " +
+    OutputDebugStringA(("[V02][Configurator] cursor_back set to " +
                         std::to_string(m_pTarget->p_config->cursor_back) + "\n")
                            .c_str());
   }

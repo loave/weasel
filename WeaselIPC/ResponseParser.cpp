@@ -2,8 +2,21 @@
 #include <StringAlgorithm.hpp>
 #include <WeaselIPC.h>
 #include "Deserializer.h"
+#include <windows.h>
+#include <string>
 
 using namespace weasel;
+
+// [auto_pair] temp debug helper
+static void APDbg(const std::string& msg) {
+  OutputDebugStringA(("[V02][Parser] " + msg + "\n").c_str());
+}
+static std::string W2A(const std::wstring& w) {
+  std::string s;
+  for (wchar_t c : w)
+    s += (char)(c < 128 ? c : '?');
+  return s;
+}
 
 ResponseParser::ResponseParser(std::wstring* commit,
                                Context* context,
@@ -55,11 +68,20 @@ void ResponseParser::Feed(const std::wstring& line) {
   // first part of the key serve as action type
   std::wstring const& action = key[0];
 
+  // [auto_pair] log every line related to config/commit
+  if (action == L"config" || action == L"commit" || action == L"action") {
+    APDbg("Feed line: " + W2A(line));
+  }
+
   // get required action deserializer instance
   std::map<std::wstring, Deserializer::Ptr>::iterator i =
       deserializers.find(action);
   if (i == deserializers.end()) {
     // line ignored... since corresponding deserializer is not active
+    if (action == L"config") {
+      APDbg("!! config deserializer NOT registered, line ignored: " +
+            W2A(line));
+    }
     return;
   }
 

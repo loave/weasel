@@ -968,6 +968,25 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     }
     header = std::wstring(L"action=") + u8tow(actionList) + L"\n";
   }
+  // [auto_pair] log header and cursor_back-related body lines
+  if (cursor_back > 0) {
+    std::string h;
+    for (wchar_t c : header)
+      h += (char)(c < 128 ? c : '?');
+    APLOG("[Respond] header=" + h);
+    // dump body lines containing 'cursor_back'
+    size_t pos = body.find(L"config.cursor_back");
+    if (pos != std::wstring::npos) {
+      size_t eol = body.find(L'\n', pos);
+      std::wstring seg = body.substr(pos, eol - pos);
+      std::string s;
+      for (wchar_t c : seg)
+        s += (char)(c < 128 ? c : '?');
+      APLOG("[Respond] body has: " + s);
+    } else {
+      APLOG("[Respond] !! body does NOT contain config.cursor_back");
+    }
+  }
   if (!eat(header))
     return false;
 

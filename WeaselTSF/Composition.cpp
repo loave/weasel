@@ -108,12 +108,19 @@ class CEndCompositionEditSession : public CEditSession {
 };
 
 STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
+  APLOG(std::string("[EndComp] enter, cursorBack=") +
+        std::to_string(_cursorBack) + " clear=" + std::to_string((int)_clear) +
+        " comp=" + std::to_string(_pComposition != nullptr ? 1 : 0));
   /* Clear the dummy text we set before, if any. */
-  if (_pComposition == nullptr)
+  if (_pComposition == nullptr) {
+    APLOG("[EndComp] early return: composition is null");
     return S_OK;
+  }
   // Avoid null pointer dereference
-  if (!_pTextService || !_pContext)
+  if (!_pTextService || !_pContext) {
+    APLOG("[EndComp] early return: textservice or context is null");
     return S_OK;
+  }
 
   _pTextService->_ClearCompositionDisplayAttributes(ec, _pContext);
 
@@ -167,6 +174,11 @@ void WeaselTSF::_EndComposition(com_ptr<ITfContext> pContext,
     pContext->RequestEditSession(_tfClientId, pEditSession,
                                  TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
     pEditSession->Release();
+    if (cursorBack > 0) {
+      APLOG(std::string("[_EndComposition] requested, cursorBack=") +
+            std::to_string(cursorBack) +
+            " RequestEditSession hr=" + std::to_string((long)hr));
+    }
   }
 }
 
@@ -380,6 +392,9 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
   TF_SELECTION tfSelection;
   HRESULT hRet = S_OK;
 
+  APLOG(std::string("[InsertText] enter, textLen=") +
+        std::to_string(_text.length()));
+
   if (_pComposition == nullptr)
     return E_FAIL;
   if (FAILED(_pComposition->GetRange(&pRange)))
@@ -415,6 +430,8 @@ BOOL WeaselTSF::_InsertText(com_ptr<ITfContext> pContext,
 
   return TRUE;
 }
+
+/* [auto_pair] log InsertText edit session execution */
 
 void WeaselTSF::_UpdateComposition(com_ptr<ITfContext> pContext) {
   HRESULT hr;

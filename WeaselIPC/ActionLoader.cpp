@@ -3,6 +3,8 @@
 #include "Deserializer.h"
 #include "ActionLoader.h"
 #include <algorithm>
+#include <windows.h>
+#include <string>
 
 using namespace weasel;
 
@@ -25,7 +27,14 @@ void ActionLoader::Store(Deserializer::KeyType const& key,
     // require specified action deserializers
     std::for_each(vecAction.begin(), vecAction.end(),
                   [this](std::wstring& action) {
-                    Deserializer::Require(action, m_pTarget);
+                    bool ok = Deserializer::Require(action, m_pTarget);
+                    // [auto_pair] temp debug
+                    std::string a;
+                    for (wchar_t c : action)
+                      a += (char)(c < 128 ? c : '?');
+                    OutputDebugStringA(("[V02][ActionLoader] require '" + a +
+                                        "' -> " + (ok ? "OK" : "FAIL") + "\n")
+                                           .c_str());
                   });
   }
 }

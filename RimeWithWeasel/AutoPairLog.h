@@ -6,8 +6,8 @@
 #include <fstream>
 #include <string>
 
-#define AUTOPAIR_VERSION "V01"
-#define AUTOPAIR_VERSION_W L"V01"
+#define AUTOPAIR_VERSION "V02"
+#define AUTOPAIR_VERSION_W L"V02"
 
 namespace autopair {
 
