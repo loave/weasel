@@ -103,6 +103,8 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   int m_cursor_back_mode = 0;
   // [auto_pair] 按住 Shift 时最多等多久（毫秒）再放弃移动光标
   int m_cursor_back_wait_ms = 1000;
+  // [auto_pair] 上屏后多久（毫秒）开始移动光标
+  int m_cursor_back_delay_ms = 10;
   std::string m_last_schema_id;
   std::string m_last_app_name;
   weasel::UIStyle m_base_style;

@@ -119,6 +119,7 @@ class WeaselTSF : public ITfTextInputProcessorEx,
                            int targetOffset);
   void _RunCursorBackAttempt();
   void _RunShiftWait();
+  bool _ApInjectOnly() const { return _apInjectOnly; }
   void _EndComposition(com_ptr<ITfContext> pContext,
                        BOOL clear,
                        int cursorBack = 0);
@@ -228,6 +229,10 @@ class WeaselTSF : public ITfTextInputProcessorEx,
    * (style/cursor_back_mode 4 turns it off so the two paths can be told apart)
    */
   bool _apAllowInject = true;
+  /* [auto_pair] skip the TSF attempt entirely and just inject (mode 5) */
+  bool _apInjectOnly = false;
+  /* [auto_pair] how long after the commit to act, style/cursor_back_delay_ms */
+  int _apDelayMs = 10;
 
   com_ptr<ITfContext> _pEditSessionContext;
   std::wstring _editSessionText;

@@ -175,8 +175,9 @@ struct CursorBackPending {
 
 CursorBackPending g_cursorBack;
 
-// retry delays in ms, one per attempt
-const UINT kCursorBackDelays[] = {10, 40, 120, 200};
+// Extra delays between retries, added on top of the initial
+// style/cursor_back_delay_ms.
+const UINT kCursorBackRetryDelays[] = {30, 80, 200};
 const int kCursorBackMaxAttempts = 4;
 
 void CALLBACK CursorBackTimerProc(HWND, UINT, UINT_PTR id, DWORD) {
@@ -267,9 +268,12 @@ STDAPI CCursorBackEditSession::DoEditSession(TfEditCookie ec) {
         std::to_string(_targetOffset) + " end=" + std::to_string(_endOffset));
 
   if (cur >= 0 && cur == _targetOffset) {
-    // The TSF route reached the real caret, nothing more to do.
-    APLOG(tag + "== target, treating TSF route as effective, NO key injection");
-    g_cursorBack.active = false;
+    // Looks right, but do not stop here. In some apps (Chromium based ones)
+    // the text store is a shadow buffer that faithfully reports what we wrote
+    // while never forwarding it to the real caret, so this reading alone is
+    // not proof. Let the remaining attempts run; if a later one finds the
+    // caret back at the end, injection still kicks in.
+    APLOG(tag + "== target (may be a shadow buffer), keep verifying");
     return S_OK;
   }
 
@@ -330,8 +334,8 @@ void WeaselTSF::_ScheduleCursorBack(com_ptr<ITfContext> pContext,
   g_cursorBack.injected = false;
   g_cursorBack.active = true;
   g_cursorBack.generation++;
-  g_cursorBack.timerId =
-      SetTimer(NULL, 0, kCursorBackDelays[0], CursorBackTimerProc);
+  g_cursorBack.timerId = SetTimer(
+      NULL, 0, (UINT)(_apDelayMs > 0 ? _apDelayMs : 10), CursorBackTimerProc);
 
   // allowInject / waitMs are echoed so the settings the DLL actually received
   // are visible. Without them a mode 3 and a mode 4 run look identical
@@ -341,9 +345,9 @@ void WeaselTSF::_ScheduleCursorBack(com_ptr<ITfContext> pContext,
         " target=" + std::to_string(targetOffset) +
         " end=" + std::to_string(g_cursorBack.endOffset) +
         " needKeys=" + std::to_string((int)g_cursorBack.needKeys) +
-        " gen=" + std::to_string(g_cursorBack.generation) +
-        " | config: allowInject=" + std::to_string((int)_apAllowInject) +
-        " (mode " + (_apAllowInject ? "3" : "4") + ")" +
+        " gen=" + std::to_string(g_cursorBack.generation) + " | config: mode=" +
+        (_apInjectOnly ? "5" : (_apAllowInject ? "3" : "4")) +
+        " delayMs=" + std::to_string(_apDelayMs) +
         " waitMs=" + std::to_string(_apShiftWaitMs));
 }
 
@@ -503,24 +507,28 @@ void WeaselTSF::_RunCursorBackAttempt() {
   }
 
   if (g_cursorBack.active && attempt < kCursorBackMaxAttempts) {
-    g_cursorBack.timerId =
-        SetTimer(NULL, 0, kCursorBackDelays[attempt], CursorBackTimerProc);
+    g_cursorBack.timerId = SetTimer(
+        NULL, 0, kCursorBackRetryDelays[attempt - 1], CursorBackTimerProc);
   } else {
     // One line saying which mechanism actually did the job, so the two do not
     // have to be told apart by reading the whole trace.
     if (g_cursorBack.injected)
-      APLOG("[Result] caret centred by = key injection (mode 3 fallback)");
+      APLOG(std::string("[Result] acted by = key injection") +
+            (_apInjectOnly ? " (mode 5, only mechanism)"
+                           : " (mode 3, TSF route was rejected)"));
     else if (g_cursorBack.needKeys && !_apAllowInject)
       APLOG(
-          "[Result] NOT centred - composition timing did not take, injection"
-          " disabled by style/cursor_back_mode 4");
+          "[Result] NOT centred - TSF route rejected and injection disabled"
+          " by style/cursor_back_mode 4");
     else if (g_cursorBack.needKeys)
-      APLOG("[Result] NOT centred - neither mechanism worked");
+      APLOG("[Result] NOT centred - neither mechanism acted");
     else
-      APLOG(std::string("[Result] caret centred by = TSF composition timing") +
-            (_apAllowInject ? " (mode 3, fallback was available but unused)"
-                            : " (mode 4, injection disabled - proves the"
-                              " composition timing works on its own)"));
+      // Deliberately not phrased as success: every probe agreed with the
+      // target, but a shadow buffer reports exactly the same thing. Only the
+      // screen can settle it.
+      APLOG(
+          "[Result] acted by = TSF, every probe agreed with the target"
+          " (a shadow buffer looks identical, confirm on screen)");
 
     g_cursorBack.active = false;
     g_cursorBack.context.Release();
@@ -581,7 +589,10 @@ STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
    * mirroring CInlinePreeditEditSession.
    */
   int target = -1;
-  if (_cursorBack > 0) {
+  bool injectOnly = _pTextService && _pTextService->_ApInjectOnly();
+  if (injectOnly && _cursorBack > 0) {
+    APLOG("[EndComp-Pre] mode 5: skipping the TSF attempt, will inject only");
+  } else if (_cursorBack > 0) {
     com_ptr<ITfRange> pRange;
     if (_pComposition->GetRange(&pRange) == S_OK && pRange != nullptr) {
       pRange->Collapse(ec, TF_ANCHOR_END);
@@ -612,9 +623,13 @@ STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
    * there, and fall back to injecting arrow keys if it did not. Kept as a
    * safety net for apps that reset the caret when the composition ends. */
   if (_cursorBack > 0 && _pTextService) {
-    APLOG(std::string("[EndComp-Post] offset after EndComposition=") +
-          std::to_string(GetCaretOffset(_pContext, ec)));
-    _pTextService->_ScheduleCursorBack(_pContext, _cursorBack, target);
+    if (!injectOnly)
+      APLOG(std::string("[EndComp-Post] offset after EndComposition=") +
+            std::to_string(GetCaretOffset(_pContext, ec)));
+    // A target of -1 makes the scheduled step go straight to injection, which
+    // is exactly what mode 5 wants.
+    _pTextService->_ScheduleCursorBack(_pContext, _cursorBack,
+                                       injectOnly ? -1 : target);
   }
   return S_OK;
 }

@@ -28,7 +28,10 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
       // that is what schedules the caret move
       if (config.cursor_back_wait_ms > 0)
         _apShiftWaitMs = config.cursor_back_wait_ms;
+      if (config.cursor_back_delay_ms > 0)
+        _apDelayMs = config.cursor_back_delay_ms;
       _apAllowInject = config.cursor_back_inject;
+      _apInjectOnly = config.cursor_back_inject_only;
       // [auto_pair] pass cursor_back so EndComposition handles it in the
       // same edit session (avoids async ordering issues)
       _EndComposition(_pEditSessionContext, false, config.cursor_back);

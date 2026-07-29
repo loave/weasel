@@ -633,6 +633,17 @@ void RimeWithWeaselHandler::_LoadSchemaSpecificSettings(
       m_cursor_back_wait_ms = wait_ms;
     else
       m_cursor_back_wait_ms = 1000;
+
+    // How long after the commit to start moving the caret. Heavier editors
+    // (Monaco in an Electron app, for one) update their own model and caret
+    // asynchronously, and acting before they have settled gets overwritten.
+    int delay_ms = 0;
+    if (rime_api->config_get_int(&config, "style/cursor_back_delay_ms",
+                                 &delay_ms) &&
+        delay_ms > 0)
+      m_cursor_back_delay_ms = delay_ms;
+    else
+      m_cursor_back_delay_ms = 10;
   }
   rime_api->config_close(&config);
 }
@@ -776,8 +787,9 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
     //                          4 = position within the composition only, no
     //                              injection (isolates the two mechanisms when
     //                              diagnosing)
+    //                          5 = key injection only, no TSF attempt
     //                  any other = disabled
-    if ((m_cursor_back_mode == 3 || m_cursor_back_mode == 4) &&
+    if ((m_cursor_back_mode >= 3 && m_cursor_back_mode <= 5) &&
         raw_commit.length() == 2) {
       static const wchar_t* pairs[] = {
           L"()",           L"[]",           L"{}",           L"''",
@@ -807,6 +819,12 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
         .append(L"\n");
     body.append(L"config.cursor_back_inject=")
         .append(m_cursor_back_mode == 4 ? L"0" : L"1")
+        .append(L"\n");
+    body.append(L"config.cursor_back_inject_only=")
+        .append(m_cursor_back_mode == 5 ? L"1" : L"0")
+        .append(L"\n");
+    body.append(L"config.cursor_back_delay_ms=")
+        .append(std::to_wstring(m_cursor_back_delay_ms))
         .append(L"\n");
   }
 
