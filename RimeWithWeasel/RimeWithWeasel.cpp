@@ -782,15 +782,11 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
 
     // [auto_pair] A commit that is exactly one of these pairs means the caret
     // should end up between the two symbols.
-    //   style/cursor_back_mode 3 = position within the composition, with key
-    //                              injection as a fallback
-    //                          4 = position within the composition only, no
-    //                              injection (isolates the two mechanisms when
-    //                              diagnosing)
-    //                          5 = key injection only, no TSF attempt
-    //                  any other = disabled
-    if ((m_cursor_back_mode >= 3 && m_cursor_back_mode <= 5) &&
-        raw_commit.length() == 2) {
+    // style/cursor_back_mode: 3 or above enables it, anything else disables
+    // it. (Values other than 3 used to select between mechanisms that have
+    // since been reduced to one; 5 is still accepted so existing configs keep
+    // working.)
+    if (m_cursor_back_mode >= 3 && raw_commit.length() == 2) {
       static const wchar_t* pairs[] = {
           L"()",           L"[]",           L"{}",           L"''",
           L"\"\"",         L"<>",           L"``",           L"\xff08\xff09",
@@ -816,12 +812,6 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
         .append(L"\n");
     body.append(L"config.cursor_back_wait_ms=")
         .append(std::to_wstring(m_cursor_back_wait_ms))
-        .append(L"\n");
-    body.append(L"config.cursor_back_inject=")
-        .append(m_cursor_back_mode == 4 ? L"0" : L"1")
-        .append(L"\n");
-    body.append(L"config.cursor_back_inject_only=")
-        .append(m_cursor_back_mode == 5 ? L"1" : L"0")
         .append(L"\n");
     body.append(L"config.cursor_back_delay_ms=")
         .append(std::to_wstring(m_cursor_back_delay_ms))

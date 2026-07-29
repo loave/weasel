@@ -112,14 +112,12 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   /* Composition */
   void _StartComposition(com_ptr<ITfContext> pContext,
                          BOOL fCUASWorkaroundEnabled);
-  /* [auto_pair] Caret move that is retried from the message loop, so these two
-   * are driven by timer callbacks and have to stay reachable from outside. */
-  void _ScheduleCursorBack(com_ptr<ITfContext> pContext,
-                           int cursorBack,
-                           int targetOffset);
-  void _RunCursorBackAttempt();
+  /* [auto_pair] Caret move, carried out from the message loop. Both of these
+   * are driven by timer callbacks and so have to stay reachable from outside.
+   */
+  void _ScheduleCursorBack(int cursorBack);
+  void _SendCursorBackKeys(int count);
   void _RunShiftWait();
-  bool _ApInjectOnly() const { return _apInjectOnly; }
   void _EndComposition(com_ptr<ITfContext> pContext,
                        BOOL clear,
                        int cursorBack = 0);
@@ -181,10 +179,8 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   void _UninitKeyEventSink();
   void _ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten);
 
-  /* [auto_pair] Fallback for apps whose text store we cannot move the caret in:
-   * inject real VK_LEFT presses. _ProcessKeyEvent drops the keys synthesized
-   * here so rime never sees them. */
-  void _SendCursorBackKeys(int count);
+  /* [auto_pair] _ProcessKeyEvent drops the keys synthesized here so rime never
+   * sees them. */
   void _InjectLeftKeys(int count);
   BOOL _IsAutoPairSynthKey(UINT vk);
 
@@ -225,12 +221,6 @@ class WeaselTSF : public ITfTextInputProcessorEx,
    * (style/cursor_back_wait_ms) */
   ULONGLONG _apSynthUntil = 0;
   int _apShiftWaitMs = 1000;
-  /* [auto_pair] whether key injection may be used as a fallback
-   * (style/cursor_back_mode 4 turns it off so the two paths can be told apart)
-   */
-  bool _apAllowInject = true;
-  /* [auto_pair] skip the TSF attempt entirely and just inject (mode 5) */
-  bool _apInjectOnly = false;
   /* [auto_pair] how long after the commit to act, style/cursor_back_delay_ms */
   int _apDelayMs = 10;
 

@@ -191,25 +191,17 @@ struct Config {
       : inline_preedit(false),
         cursor_back(0),
         cursor_back_wait_ms(1000),
-        cursor_back_inject(true),
-        cursor_back_inject_only(false),
         cursor_back_delay_ms(10) {}
   void reset() {
     inline_preedit = false;
     cursor_back = 0;
     cursor_back_wait_ms = 1000;
-    cursor_back_inject = true;
-    cursor_back_inject_only = false;
     cursor_back_delay_ms = 10;
   }
   bool inline_preedit;
   int cursor_back;  // [auto_pair] 成对符号上屏后光标回退字符数
   // [auto_pair] 按住 Shift 时最多等多久（毫秒）再放弃移动光标
   int cursor_back_wait_ms;
-  // [auto_pair] 是否允许用注入按键兜底（关掉可单独验证 composition 内定位）
-  bool cursor_back_inject;
-  // [auto_pair] 是否跳过 TSF 尝试直接注入按键
-  bool cursor_back_inject_only;
   // [auto_pair] 上屏后多久（毫秒）开始移动光标，慢的编辑器需要更久
   int cursor_back_delay_ms;
 };

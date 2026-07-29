@@ -5,57 +5,6 @@
 #include "CandidateList.h"
 #include "AutoPairLog.h"
 
-namespace {
-
-/* [auto_pair] Character offset of the caret from the start of the document,
- * or -1 if it cannot be determined.
- *
- * Used to decide whether a SetSelection actually reached the real caret: in
- * apps whose text store only covers the composition, this reads back a stale
- * value once the composition has ended.
- */
-int GetCaretOffset(ITfContext* pContext, TfEditCookie ec) {
-  if (!pContext)
-    return -1;
-  TF_SELECTION sel;
-  ULONG fetched = 0;
-  if (FAILED(pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel,
-                                    &fetched)) ||
-      fetched == 0)
-    return -1;
-  ITfRange* pSel = sel.range;
-
-  ITfRange* pStart = nullptr;
-  int offset = -1;
-  if (SUCCEEDED(pContext->GetStart(ec, &pStart)) && pStart) {
-    ITfRange* pMeasure = nullptr;
-    if (SUCCEEDED(pStart->Clone(&pMeasure)) && pMeasure) {
-      if (SUCCEEDED(pMeasure->ShiftEndToRange(ec, pSel, TF_ANCHOR_START))) {
-        offset = 0;
-        WCHAR buf[256];
-        // Advance the start after each chunk, otherwise the range never moves
-        // and this loops forever on documents longer than the buffer.
-        for (int guard = 0; guard < 4096; ++guard) {
-          ULONG got = 0;
-          if (FAILED(pMeasure->GetText(ec, 0, buf, 256, &got)) || got == 0)
-            break;
-          offset += (int)got;
-          LONG shifted = 0;
-          if (FAILED(pMeasure->ShiftStart(ec, (LONG)got, &shifted, NULL)) ||
-              shifted == 0)
-            break;
-        }
-      }
-      pMeasure->Release();
-    }
-    pStart->Release();
-  }
-  pSel->Release();
-  return offset;
-}
-
-}  // namespace
-
 /* Start Composition */
 class CStartCompositionEditSession : public CEditSession {
  public:
@@ -135,62 +84,51 @@ void WeaselTSF::_StartComposition(com_ptr<ITfContext> pContext,
   }
 }
 
-/* [auto_pair] Deferred cursor move, with key injection as the fallback.
+/* [auto_pair] Move the caret between the two symbols just committed, by
+ * injecting real VK_LEFT presses.
  *
- * Moving the caret inside CEndCompositionEditSession works only in apps whose
- * TSF text store models the whole editable document: Firefox and RichEdit do,
- * and there the caret lands correctly. Chromium based apps expose only the
- * composition text and reset the store when the composition ends, and apps
- * going through the IMM32 compatibility layer get a throwaway document that
- * only exists during composition. In both cases SetSelection reports success
- * against a buffer that is no longer connected to the real caret.
+ * TSF's SetSelection is not usable for this. Three kinds of application, three
+ * ways it fails: apps behind the IMM32 compatibility layer hand out a document
+ * that only exists during composition and is discarded on commit; Firefox
+ * pushes the caret back to the end when the composition ends; and Chromium
+ * keeps a shadow buffer that faithfully reports whatever offset was written
+ * without ever forwarding it to the real caret. That last one is the worst,
+ * because reading the offset back is then indistinguishable from success --
+ * which is exactly why an earlier revision declared victory in Kiro and never
+ * even tried the keys that would have worked.
  *
- * So a short while after the commit, from the message loop, we read the caret
- * back. If it is where we put it, the TSF route worked and we are done. If it
- * is anywhere else (a stale offset, or unreadable) the text store is useless
- * to us and we inject real VK_LEFT presses instead.
+ * Injecting arrow keys works in all of them, and is what other IMEs do:
+ * WeChat's IME also waits for Shift to be released on the fullwidth pairs,
+ * which only makes sense if it is sending real keys too.
  *
- * The probe is idempotent: it only moves the caret when it sits exactly at the
- * end of the pair we just committed, so repeated attempts cannot walk the
- * caret past the target.
+ * Nothing but VK_LEFT is ever synthesized; see _SendCursorBackKeys for why
+ * Shift is left alone.
  */
 namespace {
 
-struct CursorBackPending {
+/* Waiting out style/cursor_back_delay_ms before touching anything. Heavier
+ * editors (Monaco inside an Electron app) update their own model and caret
+ * asynchronously and would overwrite a caret move made too early. */
+struct CaretMovePending {
   com_ptr<WeaselTSF> service;
-  com_ptr<ITfContext> context;
-  int cursorBack = 0;
-  int targetOffset = -1;  // where we want the caret
-  int endOffset = -1;     // end of the committed pair
-  int attempt = 0;
+  int count = 0;
   UINT_PTR timerId = 0;
   bool active = false;
-  bool needKeys = false;  // TSF route failed, fall back to key injection
-  bool injected = false;  // keys already sent, do not send twice
-  // Bumped on every schedule. An edit session that ended up running
-  // asynchronously carries the value it was created with, so a stale one can
-  // be recognised and its verdict discarded.
-  int generation = 0;
 };
 
-CursorBackPending g_cursorBack;
+CaretMovePending g_caretMove;
 
-// Extra delays between retries, added on top of the initial
-// style/cursor_back_delay_ms.
-const UINT kCursorBackRetryDelays[] = {30, 80, 200};
-const int kCursorBackMaxAttempts = 4;
-
-void CALLBACK CursorBackTimerProc(HWND, UINT, UINT_PTR id, DWORD) {
+void CALLBACK CaretMoveTimerProc(HWND, UINT, UINT_PTR id, DWORD) {
   KillTimer(NULL, id);
-  g_cursorBack.timerId = 0;
-  if (!g_cursorBack.active)
+  g_caretMove.timerId = 0;
+  if (!g_caretMove.active)
     return;
-  com_ptr<WeaselTSF> svc = g_cursorBack.service;
-  if (svc == nullptr) {
-    g_cursorBack.active = false;
-    return;
-  }
-  svc->_RunCursorBackAttempt();
+  com_ptr<WeaselTSF> svc = g_caretMove.service;
+  int count = g_caretMove.count;
+  g_caretMove.active = false;
+  g_caretMove.service.Release();
+  if (svc != nullptr)
+    svc->_SendCursorBackKeys(count);
 }
 
 /* [auto_pair] Waiting for the user to let go of Shift before injecting the
@@ -226,137 +164,36 @@ void CALLBACK ShiftWaitTimerProc(HWND, UINT, UINT_PTR id, DWORD) {
 
 }  // namespace
 
-class CCursorBackEditSession : public CEditSession {
- public:
-  CCursorBackEditSession(com_ptr<WeaselTSF> pTextService,
-                         com_ptr<ITfContext> pContext,
-                         int cursorBack,
-                         int targetOffset,
-                         int endOffset,
-                         int generation)
-      : CEditSession(pTextService, pContext),
-        _cursorBack(cursorBack),
-        _targetOffset(targetOffset),
-        _endOffset(endOffset),
-        _generation(generation) {}
-
-  /* ITfEditSession */
-  STDMETHODIMP DoEditSession(TfEditCookie ec);
-
- private:
-  // Own copies rather than reads of g_cursorBack: this session may run
-  // asynchronously, by which time a newer commit could have replaced it.
-  int _cursorBack;
-  int _targetOffset;
-  int _endOffset;
-  int _generation;
-
-  bool _IsStale() const { return _generation != g_cursorBack.generation; }
-};
-
-STDAPI CCursorBackEditSession::DoEditSession(TfEditCookie ec) {
-  if (!_pContext)
-    return S_OK;
-  // A newer commit has replaced what this session was created for; its verdict
-  // no longer applies.
-  if (_IsStale())
-    return S_OK;
-
-  int cur = GetCaretOffset(_pContext, ec);
-  std::string tag = "[Probe#" + std::to_string(g_cursorBack.attempt) + "] ";
-  APLOG(tag + "offset now=" + std::to_string(cur) + " target=" +
-        std::to_string(_targetOffset) + " end=" + std::to_string(_endOffset));
-
-  if (cur >= 0 && cur == _targetOffset) {
-    // Looks right, but do not stop here. In some apps (Chromium based ones)
-    // the text store is a shadow buffer that faithfully reports what we wrote
-    // while never forwarding it to the real caret, so this reading alone is
-    // not proof. Let the remaining attempts run; if a later one finds the
-    // caret back at the end, injection still kicks in.
-    APLOG(tag + "== target (may be a shadow buffer), keep verifying");
-    return S_OK;
-  }
-
-  // The caret is not where we put it. Either this text store only covers the
-  // composition (Chromium based apps, IMM32 compatibility layer) and has been
-  // reset, or the app moved the caret itself. Either way SetSelection cannot
-  // reach the real caret here, so fall back to injecting key presses.
-  if (_endOffset >= 0 && cur != _endOffset) {
-    APLOG(tag + "!= end, TSF route unusable -> will inject keys");
-    g_cursorBack.needKeys = true;
-    return S_OK;
-  }
-
-  TF_SELECTION sel;
-  ULONG fetched = 0;
-  if (FAILED(_pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel,
-                                     &fetched)) ||
-      fetched == 0) {
-    APLOG(tag + "GetSelection failed -> will inject keys");
-    g_cursorBack.needKeys = true;
-    return S_OK;
-  }
-  APLOG(tag + "at end, retrying SetSelection in place");
-
-  ITfRange* pRange = sel.range;
-  pRange->Collapse(ec, TF_ANCHOR_END);
-  LONG shifted = 0;
-  pRange->ShiftStart(ec, -_cursorBack, &shifted, NULL);
-  pRange->Collapse(ec, TF_ANCHOR_START);
-  TF_SELECTION newSel;
-  newSel.range = pRange;
-  newSel.style.ase = TF_AE_NONE;
-  newSel.style.fInterimChar = FALSE;
-  _pContext->SetSelection(ec, 1, &newSel);
-  pRange->Release();
-  return S_OK;
-}
-
-void WeaselTSF::_ScheduleCursorBack(com_ptr<ITfContext> pContext,
-                                    int cursorBack,
-                                    int targetOffset) {
-  if (cursorBack <= 0 || pContext == nullptr)
+void WeaselTSF::_ScheduleCursorBack(int cursorBack) {
+  if (cursorBack <= 0)
     return;
 
-  if (g_cursorBack.timerId != 0) {
-    KillTimer(NULL, g_cursorBack.timerId);
-    g_cursorBack.timerId = 0;
+  // A pair committed in quick succession replaces the pending one.
+  if (g_caretMove.timerId != 0) {
+    KillTimer(NULL, g_caretMove.timerId);
+    g_caretMove.timerId = 0;
   }
-  g_cursorBack.service = this;
-  g_cursorBack.context = pContext;
-  g_cursorBack.cursorBack = cursorBack;
-  g_cursorBack.targetOffset = targetOffset;
-  g_cursorBack.endOffset = targetOffset >= 0 ? targetOffset + cursorBack : -1;
-  g_cursorBack.attempt = 0;
-  // A target we could not measure means the probe below cannot decide
-  // anything, so go straight to key injection.
-  g_cursorBack.needKeys = targetOffset < 0;
-  g_cursorBack.injected = false;
-  g_cursorBack.active = true;
-  g_cursorBack.generation++;
-  g_cursorBack.timerId = SetTimer(
-      NULL, 0, (UINT)(_apDelayMs > 0 ? _apDelayMs : 10), CursorBackTimerProc);
+  if (g_shiftWait.timerId != 0) {
+    KillTimer(NULL, g_shiftWait.timerId);
+    g_shiftWait.timerId = 0;
+    g_shiftWait.active = false;
+    g_shiftWait.service.Release();
+  }
 
-  // allowInject / waitMs are echoed so the settings the DLL actually received
-  // are visible. Without them a mode 3 and a mode 4 run look identical
-  // whenever the composition timing works, and a config change that was never
-  // redeployed would be indistinguishable from one that was.
+  g_caretMove.service = this;
+  g_caretMove.count = cursorBack;
+  g_caretMove.active = true;
+  g_caretMove.timerId = SetTimer(
+      NULL, 0, (UINT)(_apDelayMs > 0 ? _apDelayMs : 10), CaretMoveTimerProc);
+
+  // The settings are echoed as the DLL received them, so a config change that
+  // was never redeployed can be told apart from one that was.
   APLOG(std::string("[Schedule] cursorBack=") + std::to_string(cursorBack) +
-        " target=" + std::to_string(targetOffset) +
-        " end=" + std::to_string(g_cursorBack.endOffset) +
-        " needKeys=" + std::to_string((int)g_cursorBack.needKeys) +
-        " gen=" + std::to_string(g_cursorBack.generation) + " | config: mode=" +
-        (_apInjectOnly ? "5" : (_apAllowInject ? "3" : "4")) +
-        " delayMs=" + std::to_string(_apDelayMs) +
+        " | config: delayMs=" + std::to_string(_apDelayMs) +
         " waitMs=" + std::to_string(_apShiftWaitMs));
 }
 
-/* [auto_pair] Inject real VK_LEFT presses.
- *
- * Most apps (Chromium based ones, and anything going through the IMM32
- * compatibility layer) expose only the composition text through their TSF
- * text store, so SetSelection cannot reach the real caret. Sending actual
- * key presses works everywhere.
+/* [auto_pair] Inject the arrow keys, waiting out a held Shift first.
  *
  * Shift is never touched. For the fullwidth pairs （ 《 ｛ ＂ the user is still
  * holding it, and a bare VK_LEFT would extend a selection rather than move the
@@ -465,77 +302,6 @@ void WeaselTSF::_InjectLeftKeys(int count) {
         " err=" + std::to_string(sent == n ? 0 : GetLastError()));
 }
 
-void WeaselTSF::_RunCursorBackAttempt() {
-  if (!g_cursorBack.active || g_cursorBack.context == nullptr) {
-    g_cursorBack.active = false;
-    return;
-  }
-
-  g_cursorBack.attempt++;
-  int attempt = g_cursorBack.attempt;
-
-  // Probe the TSF route, unless a previous attempt already ruled it out.
-  CCursorBackEditSession* pEditSession =
-      g_cursorBack.needKeys
-          ? NULL
-          : new CCursorBackEditSession(
-                this, g_cursorBack.context, g_cursorBack.cursorBack,
-                g_cursorBack.targetOffset, g_cursorBack.endOffset,
-                g_cursorBack.generation);
-  if (pEditSession != NULL) {
-    HRESULT hrSession = S_OK;
-    // Prefer synchronous so the verdict is available before this returns; fall
-    // back to async if TSF will not grant the lock right now.
-    HRESULT hr = g_cursorBack.context->RequestEditSession(
-        _tfClientId, pEditSession, TF_ES_SYNC | TF_ES_READWRITE, &hrSession);
-    if (FAILED(hr)) {
-      g_cursorBack.context->RequestEditSession(
-          _tfClientId, pEditSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE,
-          &hrSession);
-    }
-    pEditSession->Release();
-  }
-
-  // The probe above may have ruled out the TSF route. Inject keys once and
-  // stop: re-probing afterwards would only read the same stale text store.
-  if (g_cursorBack.active && g_cursorBack.needKeys && !g_cursorBack.injected) {
-    if (_apAllowInject) {
-      g_cursorBack.injected = true;
-      _SendCursorBackKeys(g_cursorBack.cursorBack);
-    }
-    g_cursorBack.active = false;
-  }
-
-  if (g_cursorBack.active && attempt < kCursorBackMaxAttempts) {
-    g_cursorBack.timerId = SetTimer(
-        NULL, 0, kCursorBackRetryDelays[attempt - 1], CursorBackTimerProc);
-  } else {
-    // One line saying which mechanism actually did the job, so the two do not
-    // have to be told apart by reading the whole trace.
-    if (g_cursorBack.injected)
-      APLOG(std::string("[Result] acted by = key injection") +
-            (_apInjectOnly ? " (mode 5, only mechanism)"
-                           : " (mode 3, TSF route was rejected)"));
-    else if (g_cursorBack.needKeys && !_apAllowInject)
-      APLOG(
-          "[Result] NOT centred - TSF route rejected and injection disabled"
-          " by style/cursor_back_mode 4");
-    else if (g_cursorBack.needKeys)
-      APLOG("[Result] NOT centred - neither mechanism acted");
-    else
-      // Deliberately not phrased as success: every probe agreed with the
-      // target, but a shadow buffer reports exactly the same thing. Only the
-      // screen can settle it.
-      APLOG(
-          "[Result] acted by = TSF, every probe agreed with the target"
-          " (a shadow buffer looks identical, confirm on screen)");
-
-    g_cursorBack.active = false;
-    g_cursorBack.context.Release();
-    g_cursorBack.service.Release();
-  }
-}
-
 /* End Composition */
 class CEndCompositionEditSession : public CEditSession {
  public:
@@ -573,64 +339,14 @@ STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
   if (_clear && _pComposition->GetRange(&pCompositionRange) == S_OK)
     pCompositionRange->SetText(ec, 0, L"", 0);
 
-  /* [auto_pair] Put the caret between the two symbols while the composition is
-   * still alive, then end it.
-   *
-   * Timing is what matters here. During a composition every app has to expose
-   * a fully addressable text store, otherwise moving the caret within the
-   * preedit string could not work at all -- and that does work everywhere, see
-   * CInlinePreeditEditSession, which positions the caret inside the preedit the
-   * same way. Once EndComposition has run the app is no longer obliged to
-   * provide that, and a SetSelection then lands in a buffer that is no longer
-   * connected to the real caret: it reports success and reads back the offset
-   * we wrote, while the caret on screen stays at the end.
-   *
-   * The composition range is used rather than the current selection, again
-   * mirroring CInlinePreeditEditSession.
-   */
-  int target = -1;
-  bool injectOnly = _pTextService && _pTextService->_ApInjectOnly();
-  if (injectOnly && _cursorBack > 0) {
-    APLOG("[EndComp-Pre] mode 5: skipping the TSF attempt, will inject only");
-  } else if (_cursorBack > 0) {
-    com_ptr<ITfRange> pRange;
-    if (_pComposition->GetRange(&pRange) == S_OK && pRange != nullptr) {
-      pRange->Collapse(ec, TF_ANCHOR_END);
-      LONG shifted = 0;
-      pRange->ShiftStart(ec, -_cursorBack, &shifted, NULL);
-      pRange->Collapse(ec, TF_ANCHOR_START);
-      TF_SELECTION sel;
-      sel.range = pRange;
-      sel.style.ase = TF_AE_NONE;
-      sel.style.fInterimChar = FALSE;
-      HRESULT hr = _pContext->SetSelection(ec, 1, &sel);
-      target = GetCaretOffset(_pContext, ec);
-      APLOG(std::string("[EndComp-Pre] positioned inside composition,"
-                        " cursorBack=") +
-            std::to_string(_cursorBack) +
-            " shifted=" + std::to_string((long)shifted) + " SetSelection hr=" +
-            std::to_string((long)hr) + " offset=" + std::to_string(target));
-    } else {
-      APLOG("[EndComp-Pre] no composition range");
-    }
-  }
-
   _pComposition->EndComposition(ec);
   if (_pTextService)  // if _pTextService released, skip _FinalizeComposition
     _pTextService->_FinalizeComposition();
 
-  /* [auto_pair] Verify from the message loop that the caret really ended up
-   * there, and fall back to injecting arrow keys if it did not. Kept as a
-   * safety net for apps that reset the caret when the composition ends. */
-  if (_cursorBack > 0 && _pTextService) {
-    if (!injectOnly)
-      APLOG(std::string("[EndComp-Post] offset after EndComposition=") +
-            std::to_string(GetCaretOffset(_pContext, ec)));
-    // A target of -1 makes the scheduled step go straight to injection, which
-    // is exactly what mode 5 wants.
-    _pTextService->_ScheduleCursorBack(_pContext, _cursorBack,
-                                       injectOnly ? -1 : target);
-  }
+  /* [auto_pair] The text is in place; now move the caret between the two
+   * symbols by injecting arrow keys from the message loop. */
+  if (_cursorBack > 0 && _pTextService)
+    _pTextService->_ScheduleCursorBack(_cursorBack);
   return S_OK;
 }
 

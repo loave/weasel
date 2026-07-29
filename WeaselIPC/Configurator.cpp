@@ -23,10 +23,6 @@ void Configurator::Store(Deserializer::KeyType const& key,
     m_pTarget->p_config->cursor_back = _wtoi(value.c_str());
   } else if (key[1] == L"cursor_back_wait_ms") {
     m_pTarget->p_config->cursor_back_wait_ms = _wtoi(value.c_str());
-  } else if (key[1] == L"cursor_back_inject") {
-    m_pTarget->p_config->cursor_back_inject = bool_value;
-  } else if (key[1] == L"cursor_back_inject_only") {
-    m_pTarget->p_config->cursor_back_inject_only = bool_value;
   } else if (key[1] == L"cursor_back_delay_ms") {
     m_pTarget->p_config->cursor_back_delay_ms = _wtoi(value.c_str());
   }

@@ -11,7 +11,7 @@
 #include <fstream>
 #include <string>
 
-#define AUTOPAIR_VERSION "V13"
+#define AUTOPAIR_VERSION "V14"
 
 namespace autopair {
 
