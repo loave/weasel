@@ -333,11 +333,18 @@ void WeaselTSF::_ScheduleCursorBack(com_ptr<ITfContext> pContext,
   g_cursorBack.timerId =
       SetTimer(NULL, 0, kCursorBackDelays[0], CursorBackTimerProc);
 
+  // allowInject / waitMs are echoed so the settings the DLL actually received
+  // are visible. Without them a mode 3 and a mode 4 run look identical
+  // whenever the composition timing works, and a config change that was never
+  // redeployed would be indistinguishable from one that was.
   APLOG(std::string("[Schedule] cursorBack=") + std::to_string(cursorBack) +
         " target=" + std::to_string(targetOffset) +
         " end=" + std::to_string(g_cursorBack.endOffset) +
         " needKeys=" + std::to_string((int)g_cursorBack.needKeys) +
-        " gen=" + std::to_string(g_cursorBack.generation));
+        " gen=" + std::to_string(g_cursorBack.generation) +
+        " | config: allowInject=" + std::to_string((int)_apAllowInject) +
+        " (mode " + (_apAllowInject ? "3" : "4") + ")" +
+        " waitMs=" + std::to_string(_apShiftWaitMs));
 }
 
 /* [auto_pair] Inject real VK_LEFT presses.
@@ -502,7 +509,7 @@ void WeaselTSF::_RunCursorBackAttempt() {
     // One line saying which mechanism actually did the job, so the two do not
     // have to be told apart by reading the whole trace.
     if (g_cursorBack.injected)
-      APLOG("[Result] caret centred by = key injection");
+      APLOG("[Result] caret centred by = key injection (mode 3 fallback)");
     else if (g_cursorBack.needKeys && !_apAllowInject)
       APLOG(
           "[Result] NOT centred - composition timing did not take, injection"
@@ -510,7 +517,10 @@ void WeaselTSF::_RunCursorBackAttempt() {
     else if (g_cursorBack.needKeys)
       APLOG("[Result] NOT centred - neither mechanism worked");
     else
-      APLOG("[Result] caret centred by = TSF composition timing");
+      APLOG(std::string("[Result] caret centred by = TSF composition timing") +
+            (_apAllowInject ? " (mode 3, fallback was available but unused)"
+                            : " (mode 4, injection disabled - proves the"
+                              " composition timing works on its own)"));
 
     g_cursorBack.active = false;
     g_cursorBack.context.Release();
