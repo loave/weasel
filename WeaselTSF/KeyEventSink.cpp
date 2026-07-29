@@ -3,31 +3,18 @@
 #include "WeaselTSF.h"
 #include <KeyEvent.h>
 #include "CandidateList.h"
-#include "AutoPairLog.h"
 
 static weasel::KeyEvent prevKeyEvent;
 static BOOL prevfEaten = FALSE;
 static int keyCountToSimulate = 0;
 
-namespace {
-
-/* [auto_pair] One line per sink call: which handler, the key, whether Windows
- * marked it as an auto-repeat (lParam bit 30) and with what repeat count, and
- * the two pairing flags as they were on entry. Temporary; goes away with
- * AutoPairLog.h. */
-std::string SinkLine(const char* sink,
-                     WPARAM wParam,
-                     LPARAM lParam,
-                     BOOL downPending,
-                     BOOL upPending) {
-  char buf[192];
-  sprintf_s(buf, "%s vk=0x%02X repeat=%d count=%u downPending=%d upPending=%d",
-            sink, (UINT)wParam, (lParam & (1L << 30)) ? 1 : 0,
-            (UINT)(lParam & 0xFFFF), downPending ? 1 : 0, upPending ? 1 : 0);
-  return buf;
+/* [auto_pair] lParam bit 30 is the previous key state: set means Windows
+ * generated this keydown by typematic repeat rather than the user pressing the
+ * key again. Nothing else in weasel carries this bit -- ConvertKeyEvent drops
+ * it -- so rime cannot tell a held key from a fresh one. */
+static BOOL IsAutoRepeatKeyDown(LPARAM lParam) {
+  return (lParam & (1L << 30)) != 0;
 }
-
-}  // namespace
 
 /* [auto_pair] Is this one of the keys we synthesized in _SendCursorBackKeys?
  *
@@ -70,15 +57,10 @@ BOOL WeaselTSF::_IsAutoPairSynthKey(UINT vk) {
  * in Firefox came out as three pairs, nested, that way. Raising
  * style/cursor_back_delay_ms only made the injection miss the window instead
  * of being transparent to it. */
-BOOL WeaselTSF::_SkipAutoPairSynthKey(const char* sink,
-                                      WPARAM wParam,
-                                      BOOL* pfEaten) {
+BOOL WeaselTSF::_SkipAutoPairSynthKey(WPARAM wParam, BOOL* pfEaten) {
   if (!_IsAutoPairSynthKey(static_cast<UINT>(wParam)))
     return FALSE;
   *pfEaten = FALSE;
-  char buf[96];
-  sprintf_s(buf, "%s: synthesized key passed through untouched", sink);
-  APLOG(buf);
   return TRUE;
 }
 
@@ -161,10 +143,9 @@ STDAPI WeaselTSF::OnTestKeyDown(ITfContext* pContext,
                                 WPARAM wParam,
                                 LPARAM lParam,
                                 BOOL* pfEaten) {
-  APLOG(SinkLine("OnTestKeyDown", wParam, lParam, _fTestKeyDownPending,
-                 _fTestKeyUpPending));
-  if (_SkipAutoPairSynthKey("OnTestKeyDown", wParam, pfEaten))
+  if (_SkipAutoPairSynthKey(wParam, pfEaten))
     return S_OK;
+  _apKeyIsAutoRepeat = IsAutoRepeatKeyDown(lParam);
   _fTestKeyUpPending = FALSE;
   if (_fTestKeyDownPending) {
     *pfEaten = TRUE;
@@ -181,10 +162,9 @@ STDAPI WeaselTSF::OnKeyDown(ITfContext* pContext,
                             WPARAM wParam,
                             LPARAM lParam,
                             BOOL* pfEaten) {
-  APLOG(SinkLine("OnKeyDown", wParam, lParam, _fTestKeyDownPending,
-                 _fTestKeyUpPending));
-  if (_SkipAutoPairSynthKey("OnKeyDown", wParam, pfEaten))
+  if (_SkipAutoPairSynthKey(wParam, pfEaten))
     return S_OK;
+  _apKeyIsAutoRepeat = IsAutoRepeatKeyDown(lParam);
   _fTestKeyUpPending = FALSE;
   if (_fTestKeyDownPending) {
     _fTestKeyDownPending = FALSE;
@@ -200,9 +180,7 @@ STDAPI WeaselTSF::OnTestKeyUp(ITfContext* pContext,
                               WPARAM wParam,
                               LPARAM lParam,
                               BOOL* pfEaten) {
-  APLOG(SinkLine("OnTestKeyUp", wParam, lParam, _fTestKeyDownPending,
-                 _fTestKeyUpPending));
-  if (_SkipAutoPairSynthKey("OnTestKeyUp", wParam, pfEaten))
+  if (_SkipAutoPairSynthKey(wParam, pfEaten))
     return S_OK;
   _fTestKeyDownPending = FALSE;
   if (_fTestKeyUpPending) {
@@ -220,9 +198,7 @@ STDAPI WeaselTSF::OnKeyUp(ITfContext* pContext,
                           WPARAM wParam,
                           LPARAM lParam,
                           BOOL* pfEaten) {
-  APLOG(SinkLine("OnKeyUp", wParam, lParam, _fTestKeyDownPending,
-                 _fTestKeyUpPending));
-  if (_SkipAutoPairSynthKey("OnKeyUp", wParam, pfEaten))
+  if (_SkipAutoPairSynthKey(wParam, pfEaten))
     return S_OK;
   _fTestKeyDownPending = FALSE;
   if (_fTestKeyUpPending) {

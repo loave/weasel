@@ -3,7 +3,6 @@
 #include "EditSession.h"
 #include "ResponseParser.h"
 #include "CandidateList.h"
-#include "AutoPairLog.h"
 
 /* Start Composition */
 class CStartCompositionEditSession : public CEditSession {
@@ -168,13 +167,17 @@ void WeaselTSF::_ScheduleCursorBack(int cursorBack) {
   if (cursorBack <= 0)
     return;
 
-  {
-    char buf[128];
-    sprintf_s(buf, "_ScheduleCursorBack: count=%d delay=%dms pendingTimer=%d",
-              cursorBack, _apDelayMs > 0 ? _apDelayMs : 10,
-              g_caretMove.timerId != 0 ? 1 : 0);
-    APLOG(buf);
-  }
+  /* [auto_pair] Don't chase the caret while the key is held down. Windows
+   * repeats the keydown about every 33ms once the repeat delay is up, rime
+   * commits a pair for each repeat, and each of those would schedule its own
+   * caret move. With the move landing in roughly the same few milliseconds as
+   * the next repeat, whichever gets there first decides whether that pair ends
+   * up nested, and the result was a random pile of brackets. Skipping the move
+   * on repeats makes it deterministic: the first press still centres the
+   * caret, and everything the held key adds after that goes in one after
+   * another. */
+  if (_apKeyIsAutoRepeat)
+    return;
 
   // A pair committed in quick succession replaces the pending one.
   if (g_caretMove.timerId != 0) {
@@ -224,12 +227,6 @@ void WeaselTSF::_SendCursorBackKeys(int count) {
 
   // GetAsyncKeyState, not GetKeyState: whether the user is physically holding
   // Shift right now is what matters, not the state as of the last message.
-  {
-    char buf[96];
-    sprintf_s(buf, "_SendCursorBackKeys: count=%d shiftHeld=%d", count,
-              (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0 ? 1 : 0);
-    APLOG(buf);
-  }
   if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) {
     if (g_shiftWait.timerId != 0) {
       KillTimer(NULL, g_shiftWait.timerId);
@@ -276,12 +273,6 @@ void WeaselTSF::_InjectLeftKeys(int count) {
     return;
   if (count > 8)
     count = 8;
-
-  {
-    char buf[96];
-    sprintf_s(buf, "_InjectLeftKeys: count=%d", count);
-    APLOG(buf);
-  }
 
   INPUT inputs[16] = {};
   UINT n = 0;
