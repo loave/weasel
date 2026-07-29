@@ -488,8 +488,10 @@ void WeaselTSF::_RunCursorBackAttempt() {
   // The probe above may have ruled out the TSF route. Inject keys once and
   // stop: re-probing afterwards would only read the same stale text store.
   if (g_cursorBack.active && g_cursorBack.needKeys && !g_cursorBack.injected) {
-    g_cursorBack.injected = true;
-    _SendCursorBackKeys(g_cursorBack.cursorBack);
+    if (_apAllowInject) {
+      g_cursorBack.injected = true;
+      _SendCursorBackKeys(g_cursorBack.cursorBack);
+    }
     g_cursorBack.active = false;
   }
 
@@ -497,6 +499,19 @@ void WeaselTSF::_RunCursorBackAttempt() {
     g_cursorBack.timerId =
         SetTimer(NULL, 0, kCursorBackDelays[attempt], CursorBackTimerProc);
   } else {
+    // One line saying which mechanism actually did the job, so the two do not
+    // have to be told apart by reading the whole trace.
+    if (g_cursorBack.injected)
+      APLOG("[Result] caret centred by = key injection");
+    else if (g_cursorBack.needKeys && !_apAllowInject)
+      APLOG(
+          "[Result] NOT centred - composition timing did not take, injection"
+          " disabled by style/cursor_back_mode 4");
+    else if (g_cursorBack.needKeys)
+      APLOG("[Result] NOT centred - neither mechanism worked");
+    else
+      APLOG("[Result] caret centred by = TSF composition timing");
+
     g_cursorBack.active = false;
     g_cursorBack.context.Release();
     g_cursorBack.service.Release();

@@ -187,16 +187,23 @@ struct Status {
 
 // 用於向前端告知設置信息
 struct Config {
-  Config() : inline_preedit(false), cursor_back(0), cursor_back_wait_ms(1000) {}
+  Config()
+      : inline_preedit(false),
+        cursor_back(0),
+        cursor_back_wait_ms(1000),
+        cursor_back_inject(true) {}
   void reset() {
     inline_preedit = false;
     cursor_back = 0;
     cursor_back_wait_ms = 1000;
+    cursor_back_inject = true;
   }
   bool inline_preedit;
   int cursor_back;  // [auto_pair] 成对符号上屏后光标回退字符数
   // [auto_pair] 按住 Shift 时最多等多久（毫秒）再放弃移动光标
   int cursor_back_wait_ms;
+  // [auto_pair] 是否允许用注入按键兜底（关掉可单独验证 composition 内定位）
+  bool cursor_back_inject;
 };
 
 struct UIStyle {

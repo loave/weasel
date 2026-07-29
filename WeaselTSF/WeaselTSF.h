@@ -224,6 +224,10 @@ class WeaselTSF : public ITfTextInputProcessorEx,
    * (style/cursor_back_wait_ms) */
   ULONGLONG _apSynthUntil = 0;
   int _apShiftWaitMs = 1000;
+  /* [auto_pair] whether key injection may be used as a fallback
+   * (style/cursor_back_mode 4 turns it off so the two paths can be told apart)
+   */
+  bool _apAllowInject = true;
 
   com_ptr<ITfContext> _pEditSessionContext;
   std::wstring _editSessionText;
