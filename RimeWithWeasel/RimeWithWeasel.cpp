@@ -617,19 +617,10 @@ void RimeWithWeaselHandler::_LoadSchemaSpecificSettings(
   // [auto_pair] load cursor_back settings
   {
     Bool enabled = False;
-    if (rime_api->config_get_bool(&config, "style/cursor_back", &enabled)) {
+    if (rime_api->config_get_bool(&config, "style/cursor_back", &enabled))
       m_cursor_back_enabled = !!enabled;
-    } else {
-      // Older configs used style/cursor_back_mode, where 3 and above meant
-      // enabled and the other values selected between mechanisms that have
-      // since been reduced to one. Still honoured so such a config keeps
-      // working instead of silently losing the feature.
-      int mode = 0;
-      if (rime_api->config_get_int(&config, "style/cursor_back_mode", &mode))
-        m_cursor_back_enabled = mode >= 3;
-      else
-        m_cursor_back_enabled = false;
-    }
+    else
+      m_cursor_back_enabled = false;
 
     // How long to wait for the user to release Shift before giving up on
     // moving the caret. Measured hold times run 120-380ms, so the default is
