@@ -616,11 +616,20 @@ void RimeWithWeaselHandler::_LoadSchemaSpecificSettings(
   // load schema icon end
   // [auto_pair] load cursor_back settings
   {
-    int mode = 0;
-    if (rime_api->config_get_int(&config, "style/cursor_back_mode", &mode))
-      m_cursor_back_mode = mode;
-    else
-      m_cursor_back_mode = 0;
+    Bool enabled = False;
+    if (rime_api->config_get_bool(&config, "style/cursor_back", &enabled)) {
+      m_cursor_back_enabled = !!enabled;
+    } else {
+      // Older configs used style/cursor_back_mode, where 3 and above meant
+      // enabled and the other values selected between mechanisms that have
+      // since been reduced to one. Still honoured so such a config keeps
+      // working instead of silently losing the feature.
+      int mode = 0;
+      if (rime_api->config_get_int(&config, "style/cursor_back_mode", &mode))
+        m_cursor_back_enabled = mode >= 3;
+      else
+        m_cursor_back_enabled = false;
+    }
 
     // How long to wait for the user to release Shift before giving up on
     // moving the caret. Measured hold times run 120-380ms, so the default is
@@ -782,11 +791,7 @@ bool RimeWithWeaselHandler::_Respond(WeaselSessionId ipc_id, EatLine eat) {
 
     // [auto_pair] A commit that is exactly one of these pairs means the caret
     // should end up between the two symbols.
-    // style/cursor_back_mode: 3 or above enables it, anything else disables
-    // it. (Values other than 3 used to select between mechanisms that have
-    // since been reduced to one; 5 is still accepted so existing configs keep
-    // working.)
-    if (m_cursor_back_mode >= 3 && raw_commit.length() == 2) {
+    if (m_cursor_back_enabled && raw_commit.length() == 2) {
       static const wchar_t* pairs[] = {
           L"()",           L"[]",           L"{}",           L"''",
           L"\"\"",         L"<>",           L"``",           L"\xff08\xff09",

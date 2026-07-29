@@ -99,8 +99,8 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   weasel::UI* m_ui;  // reference
   DWORD m_active_session;
   bool m_disabled;
-  // [auto_pair] 3 = 成对符号上屏后把光标移到中间，其他值 = 关闭
-  int m_cursor_back_mode = 0;
+  // [auto_pair] 成对符号上屏后是否把光标移到中间，style/cursor_back
+  bool m_cursor_back_enabled = false;
   // [auto_pair] 按住 Shift 时最多等多久（毫秒）再放弃移动光标
   int m_cursor_back_wait_ms = 1000;
   // [auto_pair] 上屏后多久（毫秒）开始移动光标

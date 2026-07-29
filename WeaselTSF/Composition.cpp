@@ -3,7 +3,6 @@
 #include "EditSession.h"
 #include "ResponseParser.h"
 #include "CandidateList.h"
-#include "AutoPairLog.h"
 
 /* Start Composition */
 class CStartCompositionEditSession : public CEditSession {
@@ -136,17 +135,17 @@ void CALLBACK CaretMoveTimerProc(HWND, UINT, UINT_PTR id, DWORD) {
 struct ShiftWaitPending {
   com_ptr<WeaselTSF> service;
   int count = 0;
-  int tries = 0;
-  int maxTries = 0;
+  ULONGLONG deadline = 0;  // GetTickCount64 value to give up at
   UINT_PTR timerId = 0;
   bool active = false;
 };
 
 ShiftWaitPending g_shiftWait;
 
-// 5ms rather than something coarser: the caret should land as close to the
-// moment of release as possible, and this only runs while a Shift pair is
-// pending, never during normal typing.
+// Asking for less than a clock tick just gets rounded up, so the budget is
+// tracked by wall clock rather than by counting polls. Doing it by count
+// silently stretched style/cursor_back_wait_ms to roughly three times its
+// value, because each "5ms" poll actually took about 15.6ms.
 const UINT kShiftWaitInterval = 5;
 
 void CALLBACK ShiftWaitTimerProc(HWND, UINT, UINT_PTR id, DWORD) {
@@ -185,12 +184,6 @@ void WeaselTSF::_ScheduleCursorBack(int cursorBack) {
   g_caretMove.active = true;
   g_caretMove.timerId = SetTimer(
       NULL, 0, (UINT)(_apDelayMs > 0 ? _apDelayMs : 10), CaretMoveTimerProc);
-
-  // The settings are echoed as the DLL received them, so a config change that
-  // was never redeployed can be told apart from one that was.
-  APLOG(std::string("[Schedule] cursorBack=") + std::to_string(cursorBack) +
-        " | config: delayMs=" + std::to_string(_apDelayMs) +
-        " waitMs=" + std::to_string(_apShiftWaitMs));
 }
 
 /* [auto_pair] Inject the arrow keys, waiting out a held Shift first.
@@ -230,19 +223,13 @@ void WeaselTSF::_SendCursorBackKeys(int count) {
     int budget = _apShiftWaitMs > 0 ? _apShiftWaitMs : 1000;
     g_shiftWait.service = this;
     g_shiftWait.count = count;
-    g_shiftWait.tries = 0;
-    g_shiftWait.maxTries = budget / (int)kShiftWaitInterval;
-    if (g_shiftWait.maxTries < 1)
-      g_shiftWait.maxTries = 1;
+    g_shiftWait.deadline = GetTickCount64() + (ULONGLONG)budget;
     g_shiftWait.active = true;
     g_shiftWait.timerId =
         SetTimer(NULL, 0, kShiftWaitInterval, ShiftWaitTimerProc);
-    APLOG(std::string("[SendKeys] shift held, waiting for release; budget=") +
-          std::to_string(budget) + "ms");
     return;
   }
 
-  APLOG("[SendKeys] shift not held, injecting immediately");
   _InjectLeftKeys(count);
 }
 
@@ -250,22 +237,17 @@ void WeaselTSF::_SendCursorBackKeys(int count) {
  * the budget from style/cursor_back_wait_ms runs out, leaving the caret at the
  * end rather than moving it into a selection. */
 void WeaselTSF::_RunShiftWait() {
-  g_shiftWait.tries++;
-
   if ((GetAsyncKeyState(VK_SHIFT) & 0x8000) == 0) {
     int count = g_shiftWait.count;
     g_shiftWait.active = false;
     g_shiftWait.service.Release();
-    APLOG(std::string("[ShiftWait] released after ~") +
-          std::to_string(g_shiftWait.tries * kShiftWaitInterval) + "ms");
     _InjectLeftKeys(count);
     return;
   }
 
-  if (g_shiftWait.tries >= g_shiftWait.maxTries) {
+  if (GetTickCount64() >= g_shiftWait.deadline) {
     g_shiftWait.active = false;
     g_shiftWait.service.Release();
-    APLOG("[ShiftWait] budget exhausted, giving up; caret stays at end");
     return;
   }
 
@@ -296,10 +278,7 @@ void WeaselTSF::_InjectLeftKeys(int count) {
   // Open the suppression window before sending, not after.
   _apSynthUntil = GetTickCount64() + 200;
 
-  UINT sent = ::SendInput(n, inputs, sizeof(INPUT));
-  APLOG(std::string("[Inject] VK_LEFT x") + std::to_string(count) +
-        " inputs=" + std::to_string(n) + " sent=" + std::to_string(sent) +
-        " err=" + std::to_string(sent == n ? 0 : GetLastError()));
+  ::SendInput(n, inputs, sizeof(INPUT));
 }
 
 /* End Composition */
