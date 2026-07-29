@@ -540,45 +540,56 @@ STDAPI CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
   if (_clear && _pComposition->GetRange(&pCompositionRange) == S_OK)
     pCompositionRange->SetText(ec, 0, L"", 0);
 
-  _pComposition->EndComposition(ec);
-  if (_pTextService)  // if _pTextService released, skip _FinalizeComposition
-    _pTextService->_FinalizeComposition();
-
-  /* [auto_pair] Move the caret back, in this same edit session and after
-   * EndComposition, so no other async session can override it. This is enough
-   * on its own for apps whose text store covers the whole document; for the
-   * rest the scheduled follow-up detects that it did not take and injects
-   * arrow keys instead. */
+  /* [auto_pair] Put the caret between the two symbols while the composition is
+   * still alive, then end it.
+   *
+   * Timing is what matters here. During a composition every app has to expose
+   * a fully addressable text store, otherwise moving the caret within the
+   * preedit string could not work at all -- and that does work everywhere, see
+   * CInlinePreeditEditSession, which positions the caret inside the preedit the
+   * same way. Once EndComposition has run the app is no longer obliged to
+   * provide that, and a SetSelection then lands in a buffer that is no longer
+   * connected to the real caret: it reports success and reads back the offset
+   * we wrote, while the caret on screen stays at the end.
+   *
+   * The composition range is used rather than the current selection, again
+   * mirroring CInlinePreeditEditSession.
+   */
+  int target = -1;
   if (_cursorBack > 0) {
-    TF_SELECTION sel;
-    ULONG fetched = 0;
-    if (SUCCEEDED(_pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel,
-                                          &fetched)) &&
-        fetched > 0) {
-      ITfRange* pRange = sel.range;
+    com_ptr<ITfRange> pRange;
+    if (_pComposition->GetRange(&pRange) == S_OK && pRange != nullptr) {
       pRange->Collapse(ec, TF_ANCHOR_END);
       LONG shifted = 0;
       pRange->ShiftStart(ec, -_cursorBack, &shifted, NULL);
       pRange->Collapse(ec, TF_ANCHOR_START);
-      TF_SELECTION newSel;
-      newSel.range = pRange;
-      newSel.style.ase = TF_AE_NONE;
-      newSel.style.fInterimChar = FALSE;
-      _pContext->SetSelection(ec, 1, &newSel);
-      pRange->Release();
-
-      // Where the caret should end up, for the follow-up to verify against.
-      int target = GetCaretOffset(_pContext, ec);
-      APLOG(std::string("[EndComp] cursorBack=") + std::to_string(_cursorBack) +
-            " shifted=" + std::to_string((long)shifted) +
-            " offsetAfterSetSelection=" + std::to_string(target));
-      if (_pTextService)
-        _pTextService->_ScheduleCursorBack(_pContext, _cursorBack, target);
-    } else if (_pTextService) {
-      // No selection to work with: an unmeasurable target makes the follow-up
-      // go straight to key injection.
-      _pTextService->_ScheduleCursorBack(_pContext, _cursorBack, -1);
+      TF_SELECTION sel;
+      sel.range = pRange;
+      sel.style.ase = TF_AE_NONE;
+      sel.style.fInterimChar = FALSE;
+      HRESULT hr = _pContext->SetSelection(ec, 1, &sel);
+      target = GetCaretOffset(_pContext, ec);
+      APLOG(std::string("[EndComp-Pre] positioned inside composition,"
+                        " cursorBack=") +
+            std::to_string(_cursorBack) +
+            " shifted=" + std::to_string((long)shifted) + " SetSelection hr=" +
+            std::to_string((long)hr) + " offset=" + std::to_string(target));
+    } else {
+      APLOG("[EndComp-Pre] no composition range");
     }
+  }
+
+  _pComposition->EndComposition(ec);
+  if (_pTextService)  // if _pTextService released, skip _FinalizeComposition
+    _pTextService->_FinalizeComposition();
+
+  /* [auto_pair] Verify from the message loop that the caret really ended up
+   * there, and fall back to injecting arrow keys if it did not. Kept as a
+   * safety net for apps that reset the caret when the composition ends. */
+  if (_cursorBack > 0 && _pTextService) {
+    APLOG(std::string("[EndComp-Post] offset after EndComposition=") +
+          std::to_string(GetCaretOffset(_pContext, ec)));
+    _pTextService->_ScheduleCursorBack(_pContext, _cursorBack, target);
   }
   return S_OK;
 }
