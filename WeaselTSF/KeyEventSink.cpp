@@ -3,16 +3,37 @@
 #include "WeaselTSF.h"
 #include <KeyEvent.h>
 #include "CandidateList.h"
+#include "AutoPairLog.h"
 
 static weasel::KeyEvent prevKeyEvent;
 static BOOL prevfEaten = FALSE;
 static int keyCountToSimulate = 0;
 
+namespace {
+
+/* [auto_pair] One line per sink call: which handler, the key, whether Windows
+ * marked it as an auto-repeat (lParam bit 30) and with what repeat count, and
+ * the two pairing flags as they were on entry. Temporary; goes away with
+ * AutoPairLog.h. */
+std::string SinkLine(const char* sink,
+                     WPARAM wParam,
+                     LPARAM lParam,
+                     BOOL downPending,
+                     BOOL upPending) {
+  char buf[192];
+  sprintf_s(buf, "%s vk=0x%02X repeat=%d count=%u downPending=%d upPending=%d",
+            sink, (UINT)wParam, (lParam & (1L << 30)) ? 1 : 0,
+            (UINT)(lParam & 0xFFFF), downPending ? 1 : 0, upPending ? 1 : 0);
+  return buf;
+}
+
+}  // namespace
+
 /* [auto_pair] Is this one of the keys we synthesized in _SendCursorBackKeys?
  *
  * Matched by key code within a short time window rather than by an exact
- * count: a single physical key reaches _ProcessKeyEvent twice (OnTestKeyDown
- * then OnKeyDown) whenever pfEaten stays FALSE, and the multiplier varies by
+ * count: a single physical key reaches the sink twice (OnTestKeyDown then
+ * OnKeyDown) whenever pfEaten stays FALSE, and the multiplier varies by
  * application, so a counter cannot be balanced.
  *
  * VK_LEFT only, which is now the only thing ever injected: the arrow keys wait
@@ -35,13 +56,33 @@ BOOL WeaselTSF::_IsAutoPairSynthKey(UINT vk) {
   return vk == VK_LEFT;
 }
 
+/* [auto_pair] Leave the sink immediately for the keys we synthesized: the app
+ * still acts on them, rime never sees them, and nothing else in the sink is
+ * touched.
+ *
+ * That last part is the point, and it has to happen in the four sink entry
+ * points rather than inside _ProcessKeyEvent. _fTestKeyDownPending pairs a
+ * TestKeyDown with the KeyDown that follows it; an injected key landing in
+ * between steals the pairing. OnTestKeyDown sees the flag still set and eats
+ * our arrow key, so the caret never moves, and OnKeyDown then clears the flag,
+ * after which the real key's own OnKeyDown no longer finds it pending and gets
+ * processed a second time -- committing a second pair of symbols. A single [
+ * in Firefox came out as three pairs, nested, that way. Raising
+ * style/cursor_back_delay_ms only made the injection miss the window instead
+ * of being transparent to it. */
+BOOL WeaselTSF::_SkipAutoPairSynthKey(const char* sink,
+                                      WPARAM wParam,
+                                      BOOL* pfEaten) {
+  if (!_IsAutoPairSynthKey(static_cast<UINT>(wParam)))
+    return FALSE;
+  *pfEaten = FALSE;
+  char buf[96];
+  sprintf_s(buf, "%s: synthesized key passed through untouched", sink);
+  APLOG(buf);
+  return TRUE;
+}
+
 void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
-  /* [auto_pair] swallow our own synthesized caret-move keys: let the app act
-   * on them, but keep them away from rime. */
-  if (_IsAutoPairSynthKey(static_cast<UINT>(wParam))) {
-    *pfEaten = FALSE;
-    return;
-  }
   // when _IsKeyboardDisabled don't eat the key,
   // when keyboard closable and keyboard closed, don't eat the key
   if ((_isToOpenClose && !_IsKeyboardOpen()) || _IsKeyboardDisabled()) {
@@ -120,6 +161,10 @@ STDAPI WeaselTSF::OnTestKeyDown(ITfContext* pContext,
                                 WPARAM wParam,
                                 LPARAM lParam,
                                 BOOL* pfEaten) {
+  APLOG(SinkLine("OnTestKeyDown", wParam, lParam, _fTestKeyDownPending,
+                 _fTestKeyUpPending));
+  if (_SkipAutoPairSynthKey("OnTestKeyDown", wParam, pfEaten))
+    return S_OK;
   _fTestKeyUpPending = FALSE;
   if (_fTestKeyDownPending) {
     *pfEaten = TRUE;
@@ -136,6 +181,10 @@ STDAPI WeaselTSF::OnKeyDown(ITfContext* pContext,
                             WPARAM wParam,
                             LPARAM lParam,
                             BOOL* pfEaten) {
+  APLOG(SinkLine("OnKeyDown", wParam, lParam, _fTestKeyDownPending,
+                 _fTestKeyUpPending));
+  if (_SkipAutoPairSynthKey("OnKeyDown", wParam, pfEaten))
+    return S_OK;
   _fTestKeyUpPending = FALSE;
   if (_fTestKeyDownPending) {
     _fTestKeyDownPending = FALSE;
@@ -151,6 +200,10 @@ STDAPI WeaselTSF::OnTestKeyUp(ITfContext* pContext,
                               WPARAM wParam,
                               LPARAM lParam,
                               BOOL* pfEaten) {
+  APLOG(SinkLine("OnTestKeyUp", wParam, lParam, _fTestKeyDownPending,
+                 _fTestKeyUpPending));
+  if (_SkipAutoPairSynthKey("OnTestKeyUp", wParam, pfEaten))
+    return S_OK;
   _fTestKeyDownPending = FALSE;
   if (_fTestKeyUpPending) {
     *pfEaten = TRUE;
@@ -167,6 +220,10 @@ STDAPI WeaselTSF::OnKeyUp(ITfContext* pContext,
                           WPARAM wParam,
                           LPARAM lParam,
                           BOOL* pfEaten) {
+  APLOG(SinkLine("OnKeyUp", wParam, lParam, _fTestKeyDownPending,
+                 _fTestKeyUpPending));
+  if (_SkipAutoPairSynthKey("OnKeyUp", wParam, pfEaten))
+    return S_OK;
   _fTestKeyDownPending = FALSE;
   if (_fTestKeyUpPending) {
     _fTestKeyUpPending = FALSE;

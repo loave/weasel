@@ -179,10 +179,12 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   void _UninitKeyEventSink();
   void _ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten);
 
-  /* [auto_pair] _ProcessKeyEvent drops the keys synthesized here so rime never
-   * sees them. */
+  /* [auto_pair] The key event sink drops the keys synthesized here before it
+   * touches anything else, so rime never sees them and the sink's own state is
+   * left alone. */
   void _InjectLeftKeys(int count);
   BOOL _IsAutoPairSynthKey(UINT vk);
+  BOOL _SkipAutoPairSynthKey(const char* sink, WPARAM wParam, BOOL* pfEaten);
 
   BOOL _InitPreservedKey();
   void _UninitPreservedKey();
